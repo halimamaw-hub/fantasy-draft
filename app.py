@@ -12,6 +12,7 @@ prints it on startup). Everyone sees the same shared draft state and the
 same scrolling command log, refreshed by polling every 2 seconds -- no
 websocket server needed, keeps this simple.
 """
+import math
 import os
 import threading
 import time
@@ -90,6 +91,7 @@ def _append_history(user, command, output, data=None):
 
 def _state_snapshot():
     on_clock = TRACKER.pick_order[TRACKER.overall - 1] if TRACKER.overall <= len(TRACKER.pick_order) else None
+    alliance = sorted({TRACKER.my_slot} | set(TRACKER.alliance_allies or ()))
     return {
         "overall": TRACKER.overall,
         "round": TRACKER.current_round if on_clock is not None else None,
@@ -99,7 +101,44 @@ def _state_snapshot():
         "rounds": TRACKER.rounds,
         "picks": TRACKER.overall - 1,
         "epoch": EPOCH,
+        "alliance_teams": alliance,
+        "on_clock_is_alliance": on_clock in alliance if on_clock is not None else False,
     }
+
+
+# ---------------------------------------------------------------------
+# Live report cache (catrank / h2hstand / playoffbracket, any projection
+# source). Keyed by (kind, source) only -- each entry just remembers which
+# (epoch, overall) it was computed for, and is recomputed the next time it's
+# asked for if the draft has moved on since. This is what makes the "Live
+# Standings" tab real-time without recomputing a Monte-Carlo bracket sim on
+# every 3-second poll from every browser tab: unchanged state is a cache hit.
+# ---------------------------------------------------------------------
+REPORT_KINDS = {"catrank", "h2hstand", "playoffbracket"}
+REPORT_SOURCES = {"", "espn", "roto", "rank", "table", "fantrax"}
+REPORT_CACHE = {}
+
+
+def _get_report(kind, source):
+    cmd_text = (source + kind) if source else kind
+    cache_key = (kind, source)
+    with _lock:
+        cached = REPORT_CACHE.get(cache_key)
+        if cached and cached["epoch"] == EPOCH and cached["overall"] == TRACKER.overall:
+            output, data = cached["output"], cached["data"]
+        else:
+            TRACKER.last_report = None
+            try:
+                output = engine.dispatch_command(TRACKER, cmd_text, WEEKLY)
+            except Exception as e:
+                output = f"[!] Error: {e}"
+            data = getattr(TRACKER, "last_report", None)
+            TRACKER.last_report = None
+            REPORT_CACHE[cache_key] = {
+                "epoch": EPOCH, "overall": TRACKER.overall, "output": output, "data": data,
+            }
+        state = _state_snapshot()
+    return output, data, state
 
 
 def _clock_key():
@@ -169,6 +208,53 @@ def api_history():
     return jsonify({"entries": new_entries, "state": state, "epoch": state["epoch"], "reset": reset})
 
 
+@app.route("/api/report")
+def api_report():
+    """Live catrank / h2hstand / playoffbracket for the Standings tab. Doesn't
+    touch the shared HISTORY log -- this is per-viewer, polled independently
+    of the draft pick log. ?kind=catrank|h2hstand|playoffbracket
+    &source=(blank for blended)|espn|roto|rank|table|fantrax"""
+    kind = request.args.get("kind", "catrank").strip().lower()
+    source = request.args.get("source", "").strip().lower()
+    if kind not in REPORT_KINDS or source not in REPORT_SOURCES:
+        return jsonify({"error": "bad kind/source"}), 400
+    output, data, state = _get_report(kind, source)
+    return jsonify({"output": output, "data": data, "state": state})
+
+
+@app.route("/api/players")
+def api_players():
+    """Undrafted players, best-ADP first, for the click-to-draft picker.
+    Excludes anyone already on a roster."""
+    with _lock:
+        taken = set(TRACKER._drafted_to_team.keys())
+        pool = TRACKER.pool
+        cols = ["Player", "Position", "ADP"]
+        if "Consensus_Rank" in pool.columns:
+            cols.append("Consensus_Rank")
+        records = pool[cols].to_dict("records")
+        state = _state_snapshot()
+
+    def _num(v):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return None
+        return float(v)
+
+    rows = []
+    for rec in records:
+        name = rec["Player"]
+        if name in taken:
+            continue
+        rows.append({
+            "player": name,
+            "position": rec.get("Position") or "",
+            "adp": _num(rec.get("ADP")),
+            "consensus": _num(rec.get("Consensus_Rank")),
+        })
+    rows.sort(key=lambda r: r["adp"] if r["adp"] is not None else 1e9)
+    return jsonify({"players": rows, "state": state})
+
+
 @app.route("/api/command", methods=["POST"])
 def api_command():
     body = request.get_json(force=True, silent=True) or {}
@@ -212,6 +298,7 @@ def api_reset():
             n_picks = TRACKER.overall - 1
             TRACKER, WEEKLY = new_tracker, new_weekly
             HISTORY.clear()
+            REPORT_CACHE.clear()
             EPOCH += 1
             _append_history(user, "reset",
                             f"Draft reset by {user}. All {n_picks} pick(s) and the log were erased.",

@@ -178,6 +178,61 @@
     .rlabel { width: 100%; }
   }
 
+  /* ---------- Tabs ---------- */
+  .tabs { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--border); }
+  .tabbtn {
+    background: none; border: 1px solid transparent; border-bottom: none;
+    border-radius: 8px 8px 0 0; padding: 8px 14px; font-size: 13px; font-weight: 600;
+    color: var(--muted); cursor: pointer; position: relative; top: 1px;
+  }
+  .tabbtn:hover { color: var(--text); }
+  .tabbtn.active { color: var(--text); background: var(--panel); border-color: var(--border); }
+  .tabpane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .tabpane.active { display: flex; }
+
+  /* ---------- Draft tab: click-to-draft player picker ---------- */
+  #tab-draft main { flex: 1; display: flex; min-height: 0; gap: 0; }
+  .picker { width: 300px; min-width: 220px; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+  .picker-search { padding: 10px 12px 8px; border-bottom: 1px solid var(--border); }
+  .picker-search input { width: 100%; }
+  #playerList { flex: 1; overflow-y: auto; }
+  .prow {
+    display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer;
+    border-bottom: 1px solid var(--border); font-size: 13px;
+  }
+  .prow:hover { background: rgba(91,157,255,.08); }
+  .prow:active { background: rgba(91,157,255,.16); }
+  .prow .prank { color: var(--muted); font-size: 11px; width: 30px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .prow .pnm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prow .ppos { flex-shrink: 0; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; background: #232837; color: var(--muted); }
+  .picker-empty, .picker-loading { padding: 16px 12px; color: var(--muted); font-size: 12.5px; }
+  .picker-count { padding: 6px 12px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); }
+  #tab-draft #log { flex: 1; }
+
+  /* pinned "on the clock" recommendation */
+  #recoPanel { border-bottom: 1px solid var(--border); padding: 12px 16px; background: rgba(91,157,255,.05); }
+  #recoPanel[hidden] { display: none; }
+  .reco-flag { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+  .reco-flag .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  @media (max-width: 720px) {
+    #tab-draft main { flex-direction: column; }
+    .picker { width: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+
+  /* ---------- Standings tab ---------- */
+  #tab-standings main { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  .stand-controls { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .stand-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .stand-row .rlabel { width: 74px; font-size: 12px; color: var(--muted); }
+  .stand-row button { font-size: 12px; padding: 5px 10px; }
+  .stand-row button.on { border-color: var(--accent); background: rgba(91,157,255,.15); color: #fff; }
+  .stand-row button.blend { border-color: #3a4a6b; }
+  .live-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); margin-left: auto; }
+  .live-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); animation: pulse 1.4s infinite; }
+  #standingsContent .picker-loading { padding: 20px 4px; }
+
   /* ---------- Reset button + confirmation dialog ---------- */
   header { justify-content: flex-start; }
   #resetBtn { margin-left: auto; font-size: 12px; padding: 5px 10px; color: #e0706a; border-color: #5a2f33; background: transparent; }
@@ -215,25 +270,42 @@
   </div>
 </div>
 
-<div class="quick">
-  <button data-cmd="top3">Top 3</button>
-  <button data-cmd="status">Status</button>
-  <button data-cmd="undo">Undo</button>
-  <button data-cmd="help">Help</button>
-  <span id="busy"></span>
-</div>
-<details class="reports" id="reports" open>
-  <summary>Reports by projection source</summary>
-  <div id="reportRows"></div>
-</details>
+<nav class="tabs">
+  <button class="tabbtn active" data-tab="draft">📝 Draft</button>
+  <button class="tabbtn" data-tab="standings">📊 Live Standings</button>
+</nav>
 
-<main><div id="log"></div></main>
+<section id="tab-draft" class="tabpane active">
+  <div id="recoPanel" hidden></div>
+  <div class="quick">
+    <button data-cmd="top3">Top 3</button>
+    <button data-cmd="status">Status</button>
+    <button data-cmd="undo">Undo</button>
+    <button data-cmd="help">Help</button>
+    <span id="busy"></span>
+  </div>
+  <main>
+    <div class="picker">
+      <div class="picker-search"><input id="playerSearch" placeholder="Search players…" autocomplete="off"></div>
+      <div id="playerList"><div class="picker-loading">Loading players…</div></div>
+      <div class="picker-count" id="playerCount"></div>
+    </div>
+    <div id="log"></div>
+  </main>
+  <footer>
+    <input id="name" placeholder="Your name" />
+    <input id="cmd" placeholder="Type a command (top3, status, undo, snake, 3rr)…" autocomplete="off" />
+    <button id="send">Send</button>
+  </footer>
+</section>
 
-<footer>
-  <input id="name" placeholder="Your name" />
-  <input id="cmd" placeholder="Type a player name to log a pick, or a command…" autocomplete="off" />
-  <button id="send">Send</button>
-</footer>
+<section id="tab-standings" class="tabpane">
+  <div class="stand-controls">
+    <div class="stand-row" id="standKindRow"></div>
+    <div class="stand-row" id="standSourceRow"><span class="live-badge" id="liveBadge"><span class="dot"></span>Live</span></div>
+  </div>
+  <main><div id="standingsContent"><div class="picker-loading">Loading…</div></div></main>
+</section>
 
 <script>
 const logEl = document.getElementById('log');
@@ -252,6 +324,7 @@ function renderState(s) {
   stateEl.innerHTML = s.draft_complete
     ? '<b>Draft complete</b>'
     : `Pick <b>#${s.overall}</b> · Round <b>${s.round}</b> · On the clock: <b>Team ${s.on_the_clock}</b>`;
+  if (typeof renderRecoPanel === 'function') renderRecoPanel(s);
 }
 
 function fmtPct(x, d = 1) { return x == null ? '--' : (x * 100).toFixed(d) + '%'; }
@@ -370,24 +443,6 @@ const REPORT_KINDS = [
   ['H2H Stand', 'h2hstand'],
   ['Bracket',   'playoffbracket'],
 ];
-(function buildReportButtons() {
-  const box = document.getElementById('reportRows');
-  REPORT_KINDS.forEach(([label, kind]) => {
-    const row = document.createElement('div');
-    row.className = 'rrow';
-    row.innerHTML = `<span class="rlabel">${label}</span>`;
-    REPORT_SOURCES.forEach(([key, name, file]) => {
-      const b = document.createElement('button');
-      b.textContent = name;
-      b.title = file;
-      b.dataset.cmd = key + kind;
-      if (!key) b.className = 'blend';
-      row.appendChild(b);
-    });
-    box.appendChild(row);
-  });
-  if (window.matchMedia('(max-width: 720px)').matches) document.getElementById('reports').open = false;
-})();
 
 function srcChip(src) {
   return `<span class="chip" title="${escapeHtml(src.file || 'Blended ensemble of all projection files')}">${escapeHtml(src.name)}</span>`;
@@ -520,10 +575,161 @@ async function poll() {
 }
 poll();
 
+// ---- Tabs ----
+document.querySelectorAll('.tabbtn').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.tabbtn').forEach(x => x.classList.toggle('active', x === b));
+    document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + b.dataset.tab));
+    if (b.dataset.tab === 'standings') pollStandingsNow();
+  });
+});
+
+// ---- Pinned "on the clock" recommendation (auto top-3 for teams 6, 7, 9) ----
+const recoPanel = document.getElementById('recoPanel');
+let lastTop3Data = null, lastTop3EntryId = null, recoRenderedEntryId = null;
+function renderRecoPanel(state) {
+  if (!state) return;
+  const shouldShow = state.on_clock_is_alliance && lastTop3Data && lastTop3Data.team === state.on_the_clock;
+  if (!shouldShow) {
+    recoPanel.hidden = true;
+    recoRenderedEntryId = null;
+    return;
+  }
+  // Same recommendation already rendered and visible: don't clobber an
+  // expanded/collapsed detail row by re-painting it every poll tick.
+  if (recoRenderedEntryId === lastTop3EntryId && !recoPanel.hidden) return;
+  recoPanel.hidden = false;
+  recoRenderedEntryId = lastTop3EntryId;
+  recoPanel.innerHTML = `<div class="reco-flag"><span class="dot"></span>On the clock — Team ${state.on_the_clock}</div>` + renderTop3(lastTop3Data);
+  recoPanel.querySelectorAll('tr.main').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const det = recoPanel.querySelector(`tr.detail[data-i="${tr.dataset.i}"]`);
+      const closed = det.classList.toggle('closed');
+      tr.querySelector('.chev').textContent = closed ? '▸' : '▾';
+    });
+  });
+}
+// appendEntry already runs for every polled history entry; piggyback on it to
+// notice auto top-3 postings without touching its signature.
+const _origAppendEntry = appendEntry;
+appendEntry = function (e) {
+  _origAppendEntry(e);
+  if (e.data && e.data.kind === 'top3') { lastTop3Data = e.data; lastTop3EntryId = e.id; }
+};
+
+// ---- Click-to-draft player picker ----
+const playerListEl = document.getElementById('playerList');
+const playerCountEl = document.getElementById('playerCount');
+const playerSearchEl = document.getElementById('playerSearch');
+let allPlayers = [];
+
+function renderPlayerList() {
+  const q = playerSearchEl.value.trim().toLowerCase();
+  const filtered = q ? allPlayers.filter(p => p.player.toLowerCase().includes(q)) : allPlayers;
+  playerCountEl.textContent = `${filtered.length} of ${allPlayers.length} available`;
+  if (!filtered.length) {
+    playerListEl.innerHTML = `<div class="picker-empty">No matching players.</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  filtered.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'prow';
+    row.innerHTML = `<span class="prank">${p.adp != null ? Number(p.adp).toFixed(0) : '--'}</span>` +
+      `<span class="pnm">${escapeHtml(p.player)}</span>` +
+      (p.position ? `<span class="ppos">${escapeHtml(p.position)}</span>` : '');
+    row.addEventListener('click', () => sendCommand(p.player));
+    frag.appendChild(row);
+  });
+  playerListEl.innerHTML = '';
+  playerListEl.appendChild(frag);
+}
+playerSearchEl.addEventListener('input', renderPlayerList);
+
+let playersInflight = false;
+async function refreshPlayers() {
+  if (playersInflight) return;
+  playersInflight = true;
+  try {
+    const res = await fetch('/api/players');
+    const data = await res.json();
+    allPlayers = data.players || [];
+    renderPlayerList();
+  } catch (err) { /* retry next tick */ }
+  finally { playersInflight = false; }
+}
+refreshPlayers();
+setInterval(refreshPlayers, 3000);
+
+// ---- Live Standings tab ----
+let standKind = 'catrank';
+let standSource = '';
+const standingsContentEl = document.getElementById('standingsContent');
+const standKindRow = document.getElementById('standKindRow');
+const standSourceRow = document.getElementById('standSourceRow');
+const liveBadgeEl = document.getElementById('liveBadge');
+
+REPORT_KINDS.forEach(([label, kind]) => {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.dataset.kind = kind;
+  if (kind === standKind) b.classList.add('on');
+  b.addEventListener('click', () => {
+    standKind = kind;
+    standKindRow.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    pollStandingsNow();
+  });
+  standKindRow.appendChild(b);
+});
+REPORT_SOURCES.forEach(([key, name, file]) => {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.title = file;
+  if (!key) { b.className = 'blend on'; }
+  b.addEventListener('click', () => {
+    standSource = key;
+    standSourceRow.querySelectorAll('button[title]').forEach(x => x.classList.toggle('on', x === b));
+    pollStandingsNow();
+  });
+  standSourceRow.insertBefore(b, liveBadgeEl);
+});
+
+let standingsInflight = false;
+let standingsGen = 0;
+let standingsRenderedKey = null;
+async function pollStandingsNow() {
+  if (!document.getElementById('tab-standings').classList.contains('active')) return;
+  if (standingsInflight) return;
+  standingsInflight = true;
+  const myGen = ++standingsGen;
+  const reqKind = standKind, reqSource = standSource;
+  try {
+    const res = await fetch(`/api/report?kind=${reqKind}&source=${reqSource}`);
+    const data = await res.json();
+    if (myGen !== standingsGen) return; // a newer request superseded this one
+    // Same underlying draft state + view already painted: skip the repaint so
+    // an open <details> or scroll position in the report isn't reset every 3s.
+    const key = `${data.state && data.state.epoch}-${data.state && data.state.overall}-${reqKind}-${reqSource}`;
+    if (key === standingsRenderedKey) return;
+    standingsRenderedKey = key;
+    if (data.error) {
+      standingsContentEl.innerHTML = `<div class="picker-empty">${escapeHtml(data.error)}</div>`;
+    } else if (data.data && RENDERERS[data.data.kind]) {
+      standingsContentEl.innerHTML = RENDERERS[data.data.kind](data.data);
+    } else {
+      standingsContentEl.innerHTML = `<div class="picker-empty">${escapeHtml(data.output || 'No report available yet.')}</div>`;
+    }
+  } catch (err) { /* network hiccup, retry next tick */ }
+  finally { standingsInflight = false; }
+}
+setInterval(pollStandingsNow, 3000);
+
 let inflight = 0;
 const busyEl = document.getElementById('busy');
 function setBusy(on) {
   document.querySelectorAll('button[data-cmd]').forEach(b => { b.disabled = on; });
+  playerListEl.style.pointerEvents = on ? 'none' : '';
+  playerListEl.style.opacity = on ? '.5' : '';
 }
 // ---- Reset (always goes through the confirmation dialog) ----
 const resetModal = document.getElementById('resetModal');
@@ -558,7 +764,11 @@ resetConfirmBtn.addEventListener('click', async () => {
     // Wipe our own log right away; the next poll brings in the "draft reset" entry.
     knownEpoch = data.state.epoch;
     clearLog();
+    lastTop3Data = null; lastTop3EntryId = null; recoRenderedEntryId = null;
+    standingsRenderedKey = null;
     renderState(data.state);
+    refreshPlayers();
+    pollStandingsNow();
     closeResetDialog();
   } catch (err) {
     resetConfirmBtn.disabled = false;
@@ -587,6 +797,7 @@ async function sendCommand(text) {
   finally {
     inflight--;
     if (!inflight) { busyEl.textContent = ''; setBusy(false); }
+    refreshPlayers(); // drop the just-picked player off the clickable list right away
   }
   // next poll (within 2s) will pick up the new entry for everyone, including us
 }

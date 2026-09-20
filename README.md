@@ -13,14 +13,33 @@ a server instead of only an interactive terminal).
   the original CLI (`python engine.py`) and the web app can share it.
 - `app.py` -- a small Flask server: one shared `DraftTracker` in memory,
   one lock so simultaneous commands from different people don't collide,
-  and two endpoints (`POST /api/command`, `GET /api/history`).
-- `static/index.html` -- one plain HTML/JS page. No build step, no
-  framework. It polls `/api/history` every 2 seconds so everyone's screen
-  shows the same running log of picks/commands and the same "on the clock"
-  banner. Good enough for 3 people glancing at their phones during a draft;
-  not meant to scale past that.
-- `data/` -- the 6 CSVs you uploaded (Fantrax player pool, the 4 projection
-  sources, and the NBA schedule).
+  and several endpoints (`POST /api/command`, `GET /api/history`,
+  `GET /api/players`, `GET /api/report`, `POST /api/reset`).
+- `index.html` -- one plain HTML/JS page with two tabs (see below). No
+  build step, no framework. It polls every 2-3 seconds so everyone's
+  screen shows the same running draft. Good enough for 3 people glancing
+  at their phones during a draft; not meant to scale past that.
+- The 6 CSVs (Fantrax player pool, the 4 projection sources, and the NBA
+  schedule) sit next to `app.py`.
+
+## Two tabs
+**Draft** -- click a player's name in the searchable list on the left to log
+the pick for whoever's on the clock (no more typing names). The list drops
+a player the instant someone picks them. Whenever the clock lands on your
+alliance (teams 6, 7, 9), a "Top 3" recommendation banner appears pinned at
+the top of this tab automatically -- nobody has to click anything. Typed
+commands still work in the box at the bottom for everything else (`top3`,
+`status`, `undo`, `snake`, `3rr`, `help`, `reset`); the quick-action buttons
+cover the common ones.
+
+**Live Standings** -- Cat Rank / H2H Standings / Playoff Bracket, for any
+projection source (Blended, ESPN, RotoBaller, Rankings, table.csv, or
+Fantrax). Pick a report and a source and it stays on screen, refreshing
+itself every few seconds as picks come in -- no button to click, no
+re-running a command. Each report is cached against the current pick count
+on the server, so idle polling from everyone's open tab doesn't repeatedly
+re-run a Monte-Carlo bracket sim; it only recomputes when the draft has
+actually moved since the last time that report was asked for.
 
 ## Run it locally
 ```bash
@@ -55,19 +74,21 @@ a while mid-draft. If that's a real risk for your group, Render's cheapest
 paid instance type removes the spin-down entirely.
 
 ## Using it
-Type a player's name and hit Send (or Enter) to log the pick for whoever's
-on the clock. Everything else from the original CLI still works as a typed
-command: `top3`, `status`, `catrank`, `h2hstand`, `playoffbracket`,
-`endofseason`, `undo`, `snake`, `3rr`, `help`, plus the per-source variants
-(`espncatrank`, `rotoh2hstand`, `fantraxcatrank`, etc.). The quick-action
-buttons cover the common ones. Everyone typing into the page shares the
-exact same draft state -- there's no per-user draft.
+Click a player's name in the Draft tab's list to log the pick for whoever's
+on the clock -- no typing required. Everything else from the original CLI
+still works as a typed command in the box at the bottom of that tab: `top3`,
+`status`, `catrank`, `h2hstand`, `playoffbracket`, `endofseason`, `undo`,
+`snake`, `3rr`, `help`, plus the per-source variants (`espncatrank`,
+`rotoh2hstand`, `fantraxcatrank`, etc. -- though the Live Standings tab is
+the easier way to browse those now, see below). The quick-action buttons
+cover the common ones. Everyone using the page shares the exact same draft
+state -- there's no per-user draft.
 
 ## The Top 3 recommendation view
-`top3` (and auto-recommend) now renders as a real table on the web page: one
-row per pick with draft-market numbers, the chance the player is still there at
-your next pick, the simulated podium/sweep/title odds, and a Met / Not met goal
-pill. Click a row for the full breakdown (alliance seeds, simulation CI and
+`top3` (and auto-recommend) renders as a real table: one row per pick with
+draft-market numbers, the chance the player is still there at your next
+pick, the simulated podium/sweep/title odds, and a Met / Not met goal pill.
+Click a row for the full breakdown (alliance seeds, simulation CI and
 sample size, roster-health terms). A low-simulation-count warning shows when
 the live time budget cut the Monte Carlo short. The CLI prints the same
 information as a readable text report. This is display-only -- scoring and
@@ -77,21 +98,28 @@ structured copy on `tracker.last_report`, which `app.py` sends to the page as
 
 ## Auto Top 3 on alliance turns
 Whenever the clock lands on an alliance team (your slot + allies, i.e. teams 9, 6, 7), the server
-automatically runs `top3` for that team and posts the table to the shared log as a
-`top3 (auto, pick #N, Team X)` entry from user `auto`. It runs in the background so the pick that
-triggered it returns instantly; the table appears on everyone's screen within a few seconds via the
-normal polling. It also fires after `undo` or `snake`/`3rr` if that moves an alliance team onto the
-clock, and drops itself if the draft moves on before it finishes. Turn it off by setting the
-`AUTO_TOP3=0` environment variable on Render.
+automatically runs `top3` for that team, posts the table to the shared log as a
+`top3 (auto, pick #N, Team X)` entry from user `auto`, and the Draft tab pins it in a
+banner at the top so it can't be missed. It runs in the background so the pick that
+triggered it returns instantly; the recommendation appears on everyone's screen within a few
+seconds via the normal polling. It also fires after `undo` or `snake`/`3rr` if that moves an
+alliance team onto the clock, and drops itself if the draft moves on before it finishes.
+Turn it off by setting the `AUTO_TOP3=0` environment variable on Render.
 
-## Cat rank, H2H standings and playoff bracket views
-`catrank`, `h2hstand` and `playoffbracket` get the same treatment: an aligned
-text report on the CLI, and real HTML on the web page (a color-scaled category
-rank grid, a standings table with the bye line and the alliance's projected
-losses, and a round-by-round bracket with a podium strip). Scoring is unchanged.
+## Live Standings tab: cat rank, H2H standings and playoff bracket
+`catrank`, `h2hstand` and `playoffbracket` get their own tab: a color-scaled
+category rank grid, a standings table with the bye line and the alliance's
+projected losses, and a round-by-round bracket with a podium strip. It picks
+up new picks on its own -- no command to type or button to click, it just
+polls `GET /api/report` every few seconds and repaints when the draft has
+actually moved. The CLI still prints the same reports as aligned text.
+Scoring is unchanged either way.
 
-Each one can also be run against a single projection file. Prefix the command
-with the source: `espn`, `roto`, `rank`, `table`, or `fantrax`.
+Each one can also be viewed against a single projection file -- pick a
+source button (Blended / ESPN / RotoBaller / Rankings / table.csv /
+Fantrax) above the report. Under the hood these are the same per-source
+commands as the original CLI (`espncatrank`, `rotoh2hstand`, `fantraxbracket`,
+etc.), just fetched live instead of typed:
 
 | Command | Example (ESPN) | File used |
 |---|---|---|
