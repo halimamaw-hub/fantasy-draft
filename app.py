@@ -46,6 +46,12 @@ AUTO_TOP3 = os.environ.get("AUTO_TOP3", "1").strip().lower() not in ("0", "false
 # POOL_SIZE environment variable (e.g. on Render) without touching code.
 POOL_SIZE = int(os.environ.get("POOL_SIZE", engine.DEFAULT_POOL_SIZE))
 
+# Teams whose automatic top-3 is temporarily suspended (toggled from the page or
+# with the `pause` / `resume` commands). This is a live setting, not draft state:
+# it survives a draft reset, but not a server restart. Manual `top3 <team>` still
+# works for a paused team.
+AUTO_PAUSED = set()
+
 
 def _build_draft():
     """Builds a brand-new, empty draft (same settings every time)."""
@@ -103,6 +109,8 @@ def _state_snapshot():
         "epoch": EPOCH,
         "alliance_teams": alliance,
         "on_clock_is_alliance": on_clock in alliance if on_clock is not None else False,
+        "auto_top3_enabled": AUTO_TOP3,
+        "auto_top3_paused": sorted(AUTO_PAUSED),
     }
 
 
@@ -155,6 +163,8 @@ def _auto_top3_worker(tracker, overall, team, epoch):
     with _lock:
         if TRACKER is not tracker or EPOCH != epoch or _clock_key() != (overall, team):
             return
+        if team in AUTO_PAUSED:  # paused while this was queued
+            return
         TRACKER.last_report = None
         try:
             output = engine.dispatch_command(TRACKER, f"top3 {team}", WEEKLY)
@@ -175,10 +185,62 @@ def _maybe_auto_top3(before_key):
     if after_key == before_key or team is None:
         return
     alliance = set(TRACKER.alliance_allies or ()) | {TRACKER.my_slot}
-    if team not in alliance:
+    if team not in alliance or team in AUTO_PAUSED:
         return
     threading.Thread(target=_auto_top3_worker, args=(TRACKER, overall, team, EPOCH),
                      daemon=True).start()
+
+
+def _alliance_teams():
+    return {TRACKER.my_slot} | set(TRACKER.alliance_allies or ())
+
+
+def _set_auto_paused(user, teams, paused):
+    """Call while holding _lock. Pauses/resumes the auto top-3 for `teams` and
+    logs it. Returns (message, error). Resuming a team that is on the clock right
+    now immediately posts its recommendation, so it isn't left without one."""
+    allowed = _alliance_teams()
+    bad = [t for t in teams if t not in allowed]
+    if bad:
+        return None, f"Auto top-3 only runs for alliance teams {sorted(allowed)} (not {bad})."
+    changed = [t for t in sorted(teams) if (t not in AUTO_PAUSED) == paused]
+    for t in changed:
+        (AUTO_PAUSED.add if paused else AUTO_PAUSED.discard)(t)
+    verb = "paused" if paused else "resumed"
+    if not changed:
+        msg = f"Auto top-3 already {verb} for Team {', '.join(map(str, sorted(teams)))}."
+    else:
+        msg = f"Auto top-3 {verb} for Team {', '.join(map(str, changed))}."
+    still = sorted(AUTO_PAUSED)
+    msg += f" Currently paused: {', '.join('Team ' + str(t) for t in still) if still else 'none'}."
+    if not AUTO_TOP3:
+        msg += " (Note: AUTO_TOP3 is set to off on the server, so nothing auto-runs at all.)"
+    _append_history(user, ("pause " if paused else "resume ") + " ".join(map(str, sorted(teams))),
+                    msg, {"kind": "auto_top3", "paused": still})
+    if not paused and AUTO_TOP3 and changed:
+        overall, team = _clock_key()
+        if team in changed:
+            threading.Thread(target=_auto_top3_worker, args=(TRACKER, overall, team, EPOCH),
+                             daemon=True).start()
+    return msg, None
+
+
+def _parse_pause_command(text):
+    """'pause 6' / 'resume all' / 'pause 6 7' -> (paused, teams) or None if it
+    isn't a pause/resume command. Raises ValueError for a malformed one."""
+    parts = text.strip().lower().split()
+    if not parts or parts[0] not in ("pause", "resume", "unpause"):
+        return None
+    paused = parts[0] == "pause"
+    args = parts[1:]
+    if not args:
+        raise ValueError(f"usage: {parts[0]} <team number> [more teams] | {parts[0]} all")
+    if args == ["all"]:
+        return paused, set(_alliance_teams())
+    try:
+        return paused, {int(a.strip(",")) for a in args}
+    except ValueError:
+        raise ValueError(f"usage: {parts[0]} <team number> [more teams] | {parts[0]} all")
 
 
 @app.route("/")
@@ -263,6 +325,19 @@ def api_command():
     if not text:
         return jsonify({"error": "empty command"}), 400
     with _lock:
+        try:
+            pc = _parse_pause_command(text)
+        except ValueError as e:
+            pc, err = None, f"[!] {e}"
+            _append_history(user, text, err)
+            return jsonify({"output": err, "data": None, "state": _state_snapshot()})
+        if pc is not None:
+            msg, err = _set_auto_paused(user, pc[1], pc[0])
+            if err:
+                err = f"[!] {err}"
+                _append_history(user, text, err)
+                return jsonify({"output": err, "data": None, "state": _state_snapshot()})
+            return jsonify({"output": msg, "data": None, "state": _state_snapshot()})
         before_key = _clock_key()
         TRACKER.last_report = None  # so a stale table never rides along with a different command
         try:
@@ -275,6 +350,30 @@ def api_command():
         _maybe_auto_top3(before_key)
         state = _state_snapshot()
     return jsonify({"output": output, "data": data, "state": state})
+
+
+@app.route("/api/auto_top3", methods=["POST"])
+def api_auto_top3():
+    """Pause or resume the automatic top-3 for one team (or all alliance teams).
+    Body: {"team": 6 | "all", "paused": true|false, "user": "..."}"""
+    body = request.get_json(force=True, silent=True) or {}
+    user = (body.get("user") or "").strip() or "anon"
+    team = body.get("team")
+    paused = body.get("paused")
+    if not isinstance(paused, bool):
+        return jsonify({"error": "paused must be true or false"}), 400
+    with _lock:
+        if team == "all":
+            teams = _alliance_teams()
+        elif isinstance(team, int) and not isinstance(team, bool):
+            teams = {team}
+        else:
+            return jsonify({"error": "team must be a team number or \"all\""}), 400
+        msg, err = _set_auto_paused(user, teams, paused)
+        state = _state_snapshot()
+    if err:
+        return jsonify({"error": err, "state": state}), 400
+    return jsonify({"ok": True, "message": msg, "state": state})
 
 
 @app.route("/api/reset", methods=["POST"])

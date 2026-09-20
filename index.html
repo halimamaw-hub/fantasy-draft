@@ -216,6 +216,15 @@
   .reco-flag .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
 
+  /* auto top-3 pause / resume bar */
+  #autoBar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  #autoBar .alabel { color: var(--muted); margin-right: 2px; }
+  #autoBar button { font-size: 12px; padding: 4px 10px; border-radius: 14px; }
+  #autoBar button.on { border-color: #2f6b45; color: #7fd69c; background: rgba(127,214,156,.08); }
+  #autoBar button.paused { border-color: #6b5a2f; color: #e0a84a; background: rgba(224,168,74,.10); }
+  #autoBar button.all { border-radius: 6px; margin-left: 4px; }
+  #autoBar .aoff { color: #e0a84a; }
+
   @media (max-width: 720px) {
     #tab-draft main { flex-direction: column; }
     .picker { width: auto; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
@@ -277,6 +286,7 @@
 
 <section id="tab-draft" class="tabpane active">
   <div id="recoPanel" hidden></div>
+  <div id="autoBar" hidden></div>
   <div class="quick">
     <button data-cmd="top3">Top 3</button>
     <button data-cmd="status">Status</button>
@@ -294,7 +304,7 @@
   </main>
   <footer>
     <input id="name" placeholder="Your name" />
-    <input id="cmd" placeholder="Type a command (top3, status, undo, snake, 3rr)…" autocomplete="off" />
+    <input id="cmd" placeholder="Type a command (top3, status, undo, pause 6, resume 6, snake, 3rr)…" autocomplete="off" />
     <button id="send">Send</button>
   </footer>
 </section>
@@ -325,7 +335,48 @@ function renderState(s) {
     ? '<b>Draft complete</b>'
     : `Pick <b>#${s.overall}</b> · Round <b>${s.round}</b> · On the clock: <b>Team ${s.on_the_clock}</b>`;
   if (typeof renderRecoPanel === 'function') renderRecoPanel(s);
+  renderAutoBar(s);
 }
+
+// ---- Auto top-3: pause / resume per team ----
+const autoBarEl = document.getElementById('autoBar');
+let autoBarKey = '';
+function renderAutoBar(s) {
+  const teams = s.alliance_teams || [];
+  const paused = s.auto_top3_paused || [];
+  const key = JSON.stringify([teams, paused, s.auto_top3_enabled]);
+  if (key === autoBarKey) return;               // unchanged: don't repaint every poll
+  autoBarKey = key;
+  if (!teams.length) { autoBarEl.hidden = true; return; }
+  autoBarEl.hidden = false;
+  const chips = teams.map(t => paused.includes(t)
+    ? `<button class="paused" data-team="${t}" data-paused="0" title="Auto top-3 is paused for Team ${t}. Click to resume.">⏸ Team ${t} paused</button>`
+    : `<button class="on" data-team="${t}" data-paused="1" title="Auto top-3 is on for Team ${t}. Click to pause.">▶ Team ${t} auto</button>`).join('');
+  const allPaused = teams.every(t => paused.includes(t));
+  autoBarEl.innerHTML =
+    `<span class="alabel">Auto top-3:</span>${chips}` +
+    `<button class="all" data-team="all" data-paused="${allPaused ? 0 : 1}">${allPaused ? 'Resume all' : 'Pause all'}</button>` +
+    (s.auto_top3_enabled === false ? '<span class="aoff">(turned off on the server: AUTO_TOP3=0)</span>' : '');
+}
+autoBarEl.addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-team]');
+  if (!b) return;
+  b.disabled = true;
+  try {
+    const res = await fetch('/api/auto_top3', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        team: b.dataset.team === 'all' ? 'all' : Number(b.dataset.team),
+        paused: b.dataset.paused === '1',
+        user: nameEl.value || 'anon',
+      }),
+    });
+    const data = await res.json();
+    if (data.state) renderState(data.state);
+  } catch (err) { /* next poll will show the real state */ }
+  finally { b.disabled = false; }
+});
 
 function fmtPct(x, d = 1) { return x == null ? '--' : (x * 100).toFixed(d) + '%'; }
 function fmtNum(x, d = 1) { return x == null ? '--' : Number(x).toFixed(d); }
@@ -589,7 +640,8 @@ const recoPanel = document.getElementById('recoPanel');
 let lastTop3Data = null, lastTop3EntryId = null, recoRenderedEntryId = null;
 function renderRecoPanel(state) {
   if (!state) return;
-  const shouldShow = state.on_clock_is_alliance && lastTop3Data && lastTop3Data.team === state.on_the_clock;
+  const shouldShow = state.on_clock_is_alliance && lastTop3Data && lastTop3Data.team === state.on_the_clock
+    && lastTop3Data.overall === state.overall;   // ignore an old rec from that team's earlier turn (matters when auto is paused)
   if (!shouldShow) {
     recoPanel.hidden = true;
     recoRenderedEntryId = null;
