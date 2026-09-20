@@ -43,13 +43,15 @@ TRACKER, WEEKLY = engine.build_tracker(
 print("Draft board ready.")
 
 # Rolling log of every command run so far, shared by all clients.
-# Each entry: {id, ts, user, command, output}
+# Each entry: {id, ts, user, command, output, data}
+# `data` is optional structured info (currently the top-3 table) that the
+# page renders as HTML; `output` is always the plain-text version.
 HISTORY = []
 _next_id = 1
 HISTORY_CAP = 500  # trim so a long draft night doesn't grow this unbounded
 
 
-def _append_history(user, command, output):
+def _append_history(user, command, output, data=None):
     global _next_id
     HISTORY.append({
         "id": _next_id,
@@ -57,6 +59,7 @@ def _append_history(user, command, output):
         "user": user or "?",
         "command": command,
         "output": output,
+        "data": data,
     })
     _next_id += 1
     if len(HISTORY) > HISTORY_CAP:
@@ -104,13 +107,16 @@ def api_command():
     if not text:
         return jsonify({"error": "empty command"}), 400
     with _lock:
+        TRACKER.last_top3 = None  # so a stale table never rides along with a different command
         try:
             output = engine.dispatch_command(TRACKER, text, WEEKLY)
         except Exception as e:
             output = f"[!] Error: {e}"
-        _append_history(user, text, output)
+        data = getattr(TRACKER, "last_top3", None)
+        TRACKER.last_top3 = None
+        _append_history(user, text, output, data)
         state = _state_snapshot()
-    return jsonify({"output": output, "state": state})
+    return jsonify({"output": output, "data": data, "state": state})
 
 
 if __name__ == "__main__":

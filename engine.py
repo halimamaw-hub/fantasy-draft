@@ -2146,37 +2146,236 @@ def _v12_candidate_base_table(tracker, team):
     base = base.sort_values("pre_mc_score", ascending=False).head(8)
     return base.reset_index(drop=True), punted
 
-def print_top3_table(top3, punt_note, tracker=None, team=None):
-    """v12: print the requested full live-feature table, every allied turn."""
-    label = team_label(team) if team is not None else ""
-    print("=" * 132)
-    print(f"V12 TOP 3 DRAFT RECOMMENDATIONS -- {label}")
-    print("=" * 132)
-    cols = [
-        "Recommendation", "Player", "Position", "ADP", "Consensus_Rank",
-        "Yahoo_Rank", "NBA_9Cat_Rank", "value_z", "swing_alignment",
-        "return_prob_next_pick", "sniped_before_next_pick_pct",
-        "future_value_mean", "mc_sweep_prob", "mc_season_sweep_prob",
-        "mc_alliance_top3_share", "mc_team_champ_prob", "mc_trials", "mc_ci_low", "mc_ci_high",
-        "live_goal_score", "plain_summary"
-    ]
-    cols = [c for c in cols if c in top3.columns]
-    disp = top3[cols].copy()
-    for c in ("ADP", "Consensus_Rank", "Yahoo_Rank", "NBA_9Cat_Rank", "value_z", "swing_alignment", "future_value_mean", "live_goal_score"):
-        if c in disp.columns:
-            disp[c] = pd.to_numeric(disp[c], errors="coerce").round(2)
-    for c in ("return_prob_next_pick", "mc_sweep_prob", "mc_season_sweep_prob", "mc_team_champ_prob", "mc_ci_low", "mc_ci_high"):
-        if c in disp.columns:
-            disp[c] = (pd.to_numeric(disp[c], errors="coerce") * 100).round(1).astype(str) + "%"
-    if "sniped_before_next_pick_pct" in disp.columns:
-        disp["sniped_before_next_pick_pct"] = pd.to_numeric(disp["sniped_before_next_pick_pct"], errors="coerce").round(1).astype(str) + "%"
-    print(disp.to_string(index=False))
-    print("-" * 132)
+# ---------------------------------------------------------------------------
+# Top-3 recommendation display.
+#
+# PRESENTATION ONLY: nothing here changes how candidates are scored or ranked.
+# recommend_top3() still produces the same DataFrame; this section only turns
+# it into (a) a readable text report for the CLI / shared log and (b) a small
+# JSON-friendly payload (tracker.last_top3) the web page renders as an HTML
+# table.
+# ---------------------------------------------------------------------------
+import textwrap as _textwrap
+
+
+def _t3_num(row, key, default=None):
+    """Read a numeric value from a row; NaN / missing / non-numeric -> default."""
+    try:
+        v = row.get(key, default)
+    except Exception:
+        return default
+    if v is None:
+        return default
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return default
+    return default if math.isnan(v) else v
+
+
+def _t3_seeds(row):
+    """Projected regular-season seeds of the alliance teams, e.g. [3, 5, 9]."""
+    s = row.get("v13_alliance_seeds") if hasattr(row, "get") else None
+    if s is None:
+        return []
+    try:
+        return [int(x) for x in s]
+    except (TypeError, ValueError):
+        return []
+
+
+def _t3_pct(x, digits=1):
+    return "--" if x is None else f"{x * 100:.{digits}f}%"
+
+
+def _t3_signed(x):
+    return "--" if x is None else f"{x:+.2f}"
+
+
+def _t3_build_payload(top3, punt_note, tracker=None, team=None):
+    """Turn recommend_top3()'s DataFrame into a plain-dict payload."""
+    next_pick = None
+    overall = rnd = None
+    if tracker is not None:
+        team_for_pick = team if team is not None else tracker.my_slot
+        next_pick = next_own_pick_overall(tracker, after=tracker.overall, team=team_for_pick)
+        overall = int(tracker.overall)
+        try:
+            rnd = int(tracker.current_round)
+        except Exception:
+            rnd = None
+
+    rows = []
     for _, r in top3.iterrows():
-        print(f"#{int(r['Recommendation'])} {r['Player']}: {r['reasoning']}")
-    print("\n" + punt_note)
-    print("=" * 132)
-    return disp
+        seeds = _t3_seeds(r)
+        byes = _t3_num(r, "v13_bye_count")
+        rows.append({
+            "rank": int(r["Recommendation"]),
+            "player": str(r["Player"]),
+            "position": str(r.get("Position", "") or ""),
+            "adp": _t3_num(r, "ADP"),
+            "consensus": _t3_num(r, "Consensus_Rank"),
+            "yahoo": _t3_num(r, "Yahoo_Rank"),
+            "nba9": _t3_num(r, "NBA_9Cat_Rank"),
+            "value_z": _t3_num(r, "value_z"),
+            "swing": _t3_num(r, "swing_alignment"),
+            "future_value": _t3_num(r, "future_value_mean"),
+            "still_there": _t3_num(r, "return_prob_next_pick"),
+            "podium": _t3_num(r, "mc_podium_2plus_prob"),
+            "sweep": _t3_num(r, "mc_sweep_prob"),
+            "season_sweep": _t3_num(r, "mc_season_sweep_prob"),
+            "champ": _t3_num(r, "mc_team_champ_prob"),
+            "ci_low": _t3_num(r, "mc_ci_low"),
+            "ci_high": _t3_num(r, "mc_ci_high"),
+            "sims": int(_t3_num(r, "mc_trials", 0) or 0),
+            "targets_met": bool(r.get("v15_target_met", False)),
+            "seeds": seeds,
+            "byes": None if byes is None else int(byes),
+            "floor": _t3_num(r, "v13_category_floor"),
+            "comp": _t3_num(r, "v15_complementarity"),
+            "weakest_ally": _t3_num(r, "v15_min_strength"),
+            "path": _t3_num(r, "v15_playoff_path"),
+            "goal_score": _t3_num(r, "live_goal_score"),
+        })
+
+    return {
+        "kind": "top3",
+        "team": None if team is None else int(team),
+        "team_label": team_label(team) if team is not None else "",
+        "overall": overall,
+        "round": rnd,
+        "next_pick": next_pick,
+        "targets": {"podium": float(V15_PODIUM_TARGET), "sweep": float(V15_SWEEP_FLOOR)},
+        "min_sims": int(V15_LIVE_MIN),
+        "rows": rows,
+        "note": str(punt_note or ""),
+    }
+
+
+_T3_KEY = [
+    ("ADP / Cons.", "average draft position / consensus rank (lower = drafted earlier)"),
+    ("Value", "z-score total across the 9 categories (higher = better)"),
+    ("Back at #N", "chance he is still available at your next pick"),
+    ("Podium 2+", "chance at least 2 alliance teams finish in the playoff top 3"),
+    ("Sweep", "chance all 3 alliance teams finish 1-2-3 in the playoffs"),
+    ("Win title", "chance this team wins the championship"),
+    ("Targets", "whether Podium 2+ and Sweep both reach the goal set for the alliance"),
+]
+
+
+def _t3_render_text(p, width=100):
+    """Readable plain-text version of the payload (CLI + shared web log fallback)."""
+    rows = p["rows"]
+    bar = "=" * width
+    thin = "-" * width
+    out = [bar, f"TOP 3 PICKS  |  {p['team_label']}"]
+    sub = []
+    if p["overall"] is not None:
+        sub.append(f"Pick #{p['overall']}" + (f" (round {p['round']})" if p["round"] else ""))
+    if p["next_pick"]:
+        sub.append(f"next pick for this team: #{p['next_pick']}")
+    else:
+        sub.append("no later pick for this team")
+    out.append(" | ".join(sub))
+    out.append(bar)
+
+    back_hdr = f"Back at #{p['next_pick']}" if p["next_pick"] else "Back later"
+    hdr = ["#", "Player", "Pos", "ADP", "Cons.", "Value", back_hdr, "Podium 2+", "Sweep", "Win title", "Targets"]
+    body = []
+    for r in rows:
+        body.append([
+            str(r["rank"]), r["player"], r["position"],
+            "--" if r["adp"] is None else f"{r['adp']:.1f}",
+            "--" if r["consensus"] is None else f"{r['consensus']:.1f}",
+            "--" if r["value_z"] is None else f"{r['value_z']:.1f}",
+            _t3_pct(r["still_there"]), _t3_pct(r["podium"]), _t3_pct(r["sweep"]), _t3_pct(r["champ"]),
+            "MET" if r["targets_met"] else "not met",
+        ])
+    widths = [max(len(hdr[i]), *(len(b[i]) for b in body)) for i in range(len(hdr))]
+    left_cols = {1, 2}  # Player, Pos are left-aligned; everything else right-aligned
+
+    def fmt(cells):
+        return "  ".join(c.ljust(widths[i]) if i in left_cols else c.rjust(widths[i]) for i, c in enumerate(cells))
+
+    out.append(fmt(hdr))
+    out.append("  ".join("-" * w for w in widths))
+    out.extend(fmt(b) for b in body)
+
+    out += ["", "WHY EACH PICK", thin]
+    for r in rows:
+        title = f"#{r['rank']} {r['player']}" + (f" ({r['position']})" if r["position"] else "")
+        out.append(title)
+        market = []
+        if r["adp"] is not None: market.append(f"ADP {r['adp']:.1f}")
+        if r["consensus"] is not None: market.append(f"consensus {r['consensus']:.1f}")
+        if r["yahoo"] is not None: market.append(f"Yahoo {r['yahoo']:.1f}")
+        if r["nba9"] is not None: market.append(f"NBA 9-cat {r['nba9']:.1f}")
+        if r["value_z"] is not None: market.append(f"value {r['value_z']:.2f}")
+        if r["swing"] is not None: market.append(f"category-swing fit {r['swing']:+.2f}")
+        if r["future_value"] is not None: market.append(f"future value {r['future_value']:.2f}")
+        lines = [("Market", " | ".join(market))]
+        if r["still_there"] is not None and p["next_pick"]:
+            lines.append(("Availability",
+                          f"{_t3_pct(r['still_there'])} chance he is still there at pick #{p['next_pick']} "
+                          f"({_t3_pct(1 - r['still_there'])} he is gone)"))
+        if r["seeds"]:
+            bye = "" if r["byes"] is None else f" | {r['byes']} of {len(r['seeds'])} alliance teams get a bye"
+            lines.append(("Alliance", "projected seeds " + ", ".join(str(s) for s in r["seeds"]) + bye))
+        sim = [f"podium 2+ {_t3_pct(r['podium'])}", f"sweep {_t3_pct(r['sweep'])}"]
+        if r["ci_low"] is not None and r["ci_high"] is not None:
+            sim[-1] += f" (95% CI {_t3_pct(r['ci_low'])} to {_t3_pct(r['ci_high'])})"
+        if r["season_sweep"] is not None: sim.append(f"top-3 seeds {_t3_pct(r['season_sweep'])}")
+        if r["champ"] is not None: sim.append(f"title {_t3_pct(r['champ'])}")
+        sim_txt = " | ".join(sim) + f" | {r['sims']} sims"
+        if r["sims"] < p["min_sims"]:
+            sim_txt += f" (LOW SAMPLE, under {p['min_sims']})"
+        lines.append(("Simulation", sim_txt))
+        lines.append(("Roster health",
+                      f"category floor {_t3_signed(r['floor'])} | complementarity {_t3_signed(r['comp'])} | "
+                      f"weakest ally {_t3_signed(r['weakest_ally'])} | playoff path {_t3_signed(r['path'])}"))
+        for label, txt in lines:
+            out.append(_textwrap.fill(txt, width=width, initial_indent=f"  {label:<15}",
+                                      subsequent_indent=" " * 17))
+        out.append("")
+
+    out += ["KEY", thin]
+    for k, v in _T3_KEY:
+        out.append(_textwrap.fill(v, width=width, initial_indent=f"  {k:<15}", subsequent_indent=" " * 17))
+    out.append(f"  {'Goal':<15}podium 2+ >= {p['targets']['podium']:.0%} and sweep >= {p['targets']['sweep']:.0%}")
+    if any(r["sims"] < p["min_sims"] for r in rows):
+        out.append(_textwrap.fill(
+            f"Some rows used fewer than {p['min_sims']} simulations (the live time limit was hit), "
+            f"so treat their percentages as rough.", width=width, initial_indent=f"  {'Note':<15}",
+            subsequent_indent=" " * 17))
+    if p["note"]:
+        out += ["", "ABOUT THIS RECOMMENDATION", thin,
+                _textwrap.fill(p["note"], width=width)]
+    out.append(bar)
+    return "\n".join(out)
+
+
+def print_top3_table(top3, punt_note, tracker=None, team=None):
+    """Print the top-3 recommendation as a readable report.
+
+    Also stores a structured copy on `tracker.last_top3` so the web page can
+    draw a real HTML table. Scoring/ranking logic is untouched.
+    """
+    payload = _t3_build_payload(top3, punt_note, tracker=tracker, team=team)
+    text = _t3_render_text(payload)
+    payload["text"] = text
+    if tracker is not None:
+        tracker.last_top3 = payload
+    print(text)
+
+    # Keep returning a DataFrame (callers ignore it today, but this preserves
+    # the old contract) -- now with readable column names.
+    return pd.DataFrame([{
+        "Rank": r["rank"], "Player": r["player"], "Pos": r["position"],
+        "ADP": r["adp"], "Consensus": r["consensus"], "Value": r["value_z"],
+        "Still there next pick": r["still_there"], "Podium 2+": r["podium"],
+        "Sweep": r["sweep"], "Win title": r["champ"], "Targets met": r["targets_met"],
+    } for r in payload["rows"]])
+
 
 V13_SWEEP_TARGET = 0.70
 V13_LIVE_MIN = 24

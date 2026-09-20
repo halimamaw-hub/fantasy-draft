@@ -46,6 +46,65 @@
   button:hover { border-color: var(--accent); }
   .quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 16px 8px; }
   .quick button { font-size: 12px; padding: 5px 9px; }
+
+  /* ---------- Top-3 recommendation table ---------- */
+  .top3 { white-space: normal; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 6px 0 4px; }
+  .t3-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-bottom: 8px; }
+  .t3-title { font-size: 15px; font-weight: 600; }
+  .t3-sub { font-size: 12px; color: var(--muted); }
+  .t3-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+  table.t3 { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.t3 th { text-align: right; font-weight: 500; color: var(--muted); font-size: 11px; padding: 7px 10px; white-space: nowrap; }
+  table.t3 th.l, table.t3 td.l { text-align: left; }
+  table.t3 tr.grp th { text-align: center; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .05em; font-size: 10px; padding: 6px 10px 4px; }
+  table.t3 tr.grp th.gsep, table.t3 td.gsep, table.t3 tr.cols th.gsep { border-left: 1px solid var(--border); }
+  table.t3 tr.cols th { border-bottom: 1px solid var(--border); }
+  table.t3 tr.main td { padding: 10px; text-align: right; vertical-align: middle; border-top: 1px solid var(--border); cursor: pointer; white-space: nowrap; }
+  table.t3 tbody tr.main:first-child td { border-top: none; }
+  table.t3 tr.main:hover td { background: rgba(91,157,255,.06); }
+  table.t3 tr.main.best td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  table.t3 tr.main td.l { text-align: left; }
+  .t3-rest { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .t3 .dgrid > span { min-width: 0; }
+  .t3 .rank { font-weight: 700; color: var(--accent); width: 28px; text-align: center !important; }
+  .t3 .pname { font-weight: 600; font-size: 14px; }
+  .t3 .pos { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; background: #232837; color: var(--muted); vertical-align: 1px; }
+  .t3 .tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; background: rgba(91,157,255,.15); color: var(--accent); vertical-align: 1px; }
+  .t3 .chev { color: var(--muted); font-size: 10px; margin-left: 6px; }
+  .t3 .pv { display: inline-block; min-width: 46px; font-variant-numeric: tabular-nums; }
+  .t3 .bar { display: inline-block; width: 46px; height: 5px; background: #232837; border-radius: 3px; vertical-align: middle; margin-left: 6px; overflow: hidden; }
+  .t3 .bar > span { display: block; height: 100%; background: #5d6478; border-radius: 3px; }
+  .t3 .bar.hit > span { background: var(--good); }
+  .t3 .hitv { color: var(--good); font-weight: 600; }
+  .t3 .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .t3 .pill.met { background: rgba(76,175,125,.18); color: var(--good); }
+  .t3 .pill.no { background: #232837; color: var(--muted); }
+  table.t3 tr.detail td { padding: 0; border-top: none; }
+  table.t3 tr.detail.closed { display: none; }
+  .t3 .dgrid { display: grid; grid-template-columns: 110px 1fr; gap: 5px 12px; padding: 4px 14px 12px 42px; font-size: 12.5px; line-height: 1.45; white-space: normal; }
+  .t3 .dgrid .k { color: var(--muted); }
+  .t3 .warn { color: #e0a84a; font-weight: 600; }
+  .t3-foot { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .t3-foot details { margin-top: 4px; }
+  .t3-foot summary { cursor: pointer; color: var(--accent); }
+  .t3-foot dl { display: grid; grid-template-columns: 110px 1fr; gap: 3px 12px; margin: 6px 0 2px; }
+  .t3-foot dt { color: var(--text); } .t3-foot dd { margin: 0; }
+  @media (max-width: 720px) {
+    .t3-wrap { border: none; background: none; }
+    table.t3, table.t3 tbody { display: block; }
+    table.t3 thead { display: none; }
+    table.t3 tr.main { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px 8px 0 0; padding: 10px 12px; margin-top: 10px; }
+    table.t3 tr.main.best { border-color: var(--accent); }
+    table.t3 tr.main:has(+ tr.detail.closed) { border-radius: 8px; }
+    table.t3 tr.main td { border: none !important; padding: 0 !important; text-align: left; box-shadow: none !important; background: none !important; }
+    table.t3 tr.main td.pcell { grid-column: 1 / -1; }
+    table.t3 tr.main td.rank { display: none; }
+    table.t3 tr.main td[data-label]::before { content: attr(data-label); display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 1px; }
+    table.t3 tr.detail { display: block; background: var(--panel); border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; }
+    table.t3 tr.detail td { display: block; }
+    .t3 .dgrid { grid-template-columns: 1fr; padding: 0 12px 10px; gap: 0; }
+    .t3 .dgrid .k { margin-top: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  }
 </style>
 </head>
 <body>
@@ -89,13 +148,120 @@ function renderState(s) {
     : `Pick <b>#${s.overall}</b> · Round <b>${s.round}</b> · On the clock: <b>Team ${s.on_the_clock}</b>`;
 }
 
+function fmtPct(x, d = 1) { return x == null ? '--' : (x * 100).toFixed(d) + '%'; }
+function fmtNum(x, d = 1) { return x == null ? '--' : Number(x).toFixed(d); }
+function fmtSigned(x) { return x == null ? '--' : (x >= 0 ? '+' : '') + x.toFixed(2); }
+
+function probCell(label, x, target) {
+  if (x == null) return `<td data-label="${label}">--</td>`;
+  const hit = target != null && x >= target;
+  const w = Math.max(0, Math.min(100, x * 100));
+  return `<td data-label="${label}"><span class="pv${hit ? ' hitv' : ''}">${fmtPct(x)}</span>` +
+         `<span class="bar${hit ? ' hit' : ''}"><span style="width:${w}%"></span></span></td>`;
+}
+
+function renderTop3(d) {
+  const nextLbl = d.next_pick ? `Back at #${d.next_pick}` : 'Back later';
+  const subBits = [];
+  if (d.overall != null) subBits.push(`Pick #${d.overall}` + (d.round ? ` · Round ${d.round}` : ''));
+  subBits.push(d.next_pick ? `next pick for this team: #${d.next_pick}` : 'no later pick for this team');
+  const lowSims = d.rows.some(r => r.sims < d.min_sims);
+
+  let body = '';
+  d.rows.forEach((r, i) => {
+    const market = [];
+    if (r.adp != null) market.push(`ADP ${fmtNum(r.adp)}`);
+    if (r.consensus != null) market.push(`consensus ${fmtNum(r.consensus)}`);
+    if (r.yahoo != null) market.push(`Yahoo ${fmtNum(r.yahoo)}`);
+    if (r.nba9 != null) market.push(`NBA 9-cat ${fmtNum(r.nba9)}`);
+    if (r.value_z != null) market.push(`value ${fmtNum(r.value_z, 2)}`);
+    if (r.swing != null) market.push(`category-swing fit ${fmtSigned(r.swing)}`);
+    if (r.future_value != null) market.push(`future value ${fmtNum(r.future_value, 2)}`);
+
+    let detail = `<span class="k">Market</span><span>${escapeHtml(market.join(' · '))}</span>`;
+    if (r.still_there != null && d.next_pick) {
+      detail += `<span class="k">Availability</span><span>${fmtPct(r.still_there)} chance he is still there at pick #${d.next_pick} (${fmtPct(1 - r.still_there)} he is gone)</span>`;
+    }
+    if (r.seeds && r.seeds.length) {
+      const bye = r.byes == null ? '' : ` · ${r.byes} of ${r.seeds.length} alliance teams get a bye`;
+      detail += `<span class="k">Alliance</span><span>projected seeds ${r.seeds.join(', ')}${bye}</span>`;
+    }
+    let sim = `podium 2+ ${fmtPct(r.podium)} · sweep ${fmtPct(r.sweep)}`;
+    if (r.ci_low != null && r.ci_high != null) sim += ` (95% CI ${fmtPct(r.ci_low)} to ${fmtPct(r.ci_high)})`;
+    if (r.season_sweep != null) sim += ` · top-3 seeds ${fmtPct(r.season_sweep)}`;
+    if (r.champ != null) sim += ` · title ${fmtPct(r.champ)}`;
+    sim += ` · ${r.sims} sims`;
+    const warn = r.sims < d.min_sims ? ` <span class="warn">low sample (under ${d.min_sims})</span>` : '';
+    detail += `<span class="k">Simulation</span><span>${escapeHtml(sim)}${warn}</span>`;
+    detail += `<span class="k">Roster health</span><span>category floor ${fmtSigned(r.floor)} · complementarity ${fmtSigned(r.comp)} · weakest ally ${fmtSigned(r.weakest_ally)} · playoff path ${fmtSigned(r.path)}</span>`;
+
+    body +=
+      `<tr class="main${i === 0 ? ' best' : ''}" data-i="${i}">` +
+        `<td class="rank">${r.rank}</td>` +
+        `<td class="l pcell"><span class="pname">${escapeHtml(r.player)}</span>` +
+          (r.position ? `<span class="pos">${escapeHtml(r.position)}</span>` : '') +
+          (i === 0 ? `<span class="tag">Top pick</span>` : '') +
+          `<span class="chev">${i === 0 ? '▾' : '▸'}</span></td>` +
+        `<td data-label="ADP">${fmtNum(r.adp)}</td>` +
+        `<td data-label="Cons.">${fmtNum(r.consensus)}</td>` +
+        `<td data-label="Value">${fmtNum(r.value_z)}</td>` +
+        probCell(nextLbl, r.still_there, null).replace('<td ', '<td class="gsep" ') +
+        probCell('Podium 2+', r.podium, d.targets.podium).replace('<td ', '<td class="gsep" ') +
+        probCell('Sweep', r.sweep, d.targets.sweep) +
+        probCell('Win title', r.champ, null) +
+        `<td class="gsep" data-label="Targets"><span class="pill ${r.targets_met ? 'met' : 'no'}">${r.targets_met ? 'Met' : 'Not met'}</span></td>` +
+      `</tr>` +
+      `<tr class="detail${i === 0 ? '' : ' closed'}" data-i="${i}"><td colspan="10"><div class="dgrid">${detail}</div></td></tr>`;
+  });
+
+  const key = [
+    ['ADP / Cons.', 'average draft position / consensus rank (lower = drafted earlier)'],
+    ['Value', 'z-score total across the 9 categories (higher = better)'],
+    [nextLbl, 'chance he is still available at this team\'s next pick'],
+    ['Podium 2+', 'chance at least 2 alliance teams finish in the playoff top 3'],
+    ['Sweep', 'chance all 3 alliance teams finish 1-2-3 in the playoffs'],
+    ['Win title', 'chance this team wins the championship'],
+    ['Targets', `Podium 2+ ≥ ${(d.targets.podium * 100).toFixed(0)}% and Sweep ≥ ${(d.targets.sweep * 100).toFixed(0)}% (shown in green when reached)`],
+  ].map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join('');
+
+  return `<div class="top3">` +
+    `<div class="t3-head"><span class="t3-title">Top 3 picks · ${escapeHtml(d.team_label)}</span>` +
+    `<span class="t3-sub">${escapeHtml(subBits.join(' · '))}</span></div>` +
+    `<div class="t3-wrap"><table class="t3"><thead>` +
+      `<tr class="grp"><th></th><th class="l"></th><th colspan="3">Draft market</th><th class="gsep">Availability</th><th colspan="3" class="gsep">Simulated outcomes</th><th class="gsep">Goal</th></tr>` +
+      `<tr class="cols"><th></th><th class="l">Player</th><th>ADP</th><th>Cons.</th><th>Value</th><th class="gsep">${escapeHtml(nextLbl)}</th><th class="gsep">Podium 2+</th><th>Sweep</th><th>Win title</th><th class="gsep">Targets</th></tr>` +
+    `</thead><tbody>${body}</tbody></table></div>` +
+    `<div class="t3-foot">Tap a row for the full breakdown.` +
+      (lowSims ? ` <span class="warn">Some rows ran fewer than ${d.min_sims} simulations (live time limit), so treat their percentages as rough.</span>` : '') +
+      `<details><summary>What do these columns mean?</summary><dl>${key}</dl></details>` +
+      (d.note ? `<details><summary>About this recommendation</summary><div style="margin-top:6px">${escapeHtml(d.note)}</div></details>` : '') +
+    `</div></div>`;
+}
+
 function appendEntry(e) {
   const div = document.createElement('div');
   div.className = 'entry';
   const t = new Date(e.ts * 1000).toLocaleTimeString();
+  let bodyHtml;
+  if (e.data && e.data.kind === 'top3') {
+    // Show the real table instead of the plain-text copy of it; keep any other
+    // output from the same command (e.g. the pick confirmation, timing line).
+    const rest = (e.output || '').replace(e.data.text || '', '').trim();
+    bodyHtml = (rest ? `<div class="t3-rest">${escapeHtml(rest)}</div>` : '') + renderTop3(e.data);
+  } else {
+    bodyHtml = `<div>${escapeHtml(e.output) || '<i>(no output)</i>'}</div>`;
+  }
   div.innerHTML =
     `<div class="meta"><span class="user">${escapeHtml(e.user)}</span> · ${t} · <span class="cmd">${escapeHtml(e.command)}</span></div>` +
-    `<div>${escapeHtml(e.output) || '<i>(no output)</i>'}</div>`;
+    bodyHtml;
+  // expand / collapse a pick's detail row
+  div.querySelectorAll('tr.main').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const det = div.querySelector(`tr.detail[data-i="${tr.dataset.i}"]`);
+      const closed = det.classList.toggle('closed');
+      tr.querySelector('.chev').textContent = closed ? '▸' : '▾';
+    });
+  });
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
 }
