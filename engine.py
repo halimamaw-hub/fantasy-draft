@@ -2273,7 +2273,7 @@ _V15_BATCH_TIME_FRACTION = 0.5
 # Always complete at least this many MC rollouts per candidate before a
 # deadline is allowed to cut a candidate off, so a very tight budget degrades
 # to "fewer trials" rather than "no signal at all" for any one candidate.
-_V15_MC_MIN_TRIAL_FLOOR = 4
+_V15_MC_MIN_TRIAL_FLOOR = 1
 V15_DEFAULT_WEIGHTS = {
     "sweep": 0.34,
     "two_plus_top3": 0.10,
@@ -2675,15 +2675,21 @@ def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None):
             for p in (a,b)
         )
         if overlap and (abs(da-db)<0.025 or near_target):
-            for j,p in enumerate((a,b)):
-                remaining=max(0.0, deadline - time.monotonic())
-                sub_deadline=time.monotonic() + remaining / max(1, 2 - j)
-                results[p]=v12_fast_candidate_mc(
-                    tracker,team,p,min_trials=72,max_trials=V15_LIVE_MAX+48,
-                    batch=V15_LIVE_BATCH,target_sweep=V15_SWEEP_FLOOR,conf_margin=0.03,
-                    seed=seed+50000*(j+1),deadline=sub_deadline)
-                share=float(results[p].get('mc_alliance_top3_share',0.0))
-                results[p]['mc_podium_2plus_prob']=float(np.clip((3.0*share-1.0)/2.0,0.0,1.0))
+            # Only spend more trials on refinement if there's meaningfully
+            # more time left -- otherwise this second forced-trial round is
+            # exactly what stacks on top of the first pass and blows the
+            # deadline on a slow CPU (each candidate's floor of trials runs
+            # regardless of the deadline until it's hit).
+            if time.monotonic() < deadline - 0.15:
+                for j,p in enumerate((a,b)):
+                    remaining=max(0.0, deadline - time.monotonic())
+                    sub_deadline=time.monotonic() + remaining / max(1, 2 - j)
+                    results[p]=v12_fast_candidate_mc(
+                        tracker,team,p,min_trials=72,max_trials=V15_LIVE_MAX+48,
+                        batch=V15_LIVE_BATCH,target_sweep=V15_SWEEP_FLOOR,conf_margin=0.03,
+                        seed=seed+50000*(j+1),deadline=sub_deadline)
+                    share=float(results[p].get('mc_alliance_top3_share',0.0))
+                    results[p]['mc_podium_2plus_prob']=float(np.clip((3.0*share-1.0)/2.0,0.0,1.0))
     return results
 
 def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=0, **kwargs):
