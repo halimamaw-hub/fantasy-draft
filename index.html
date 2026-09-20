@@ -48,6 +48,7 @@
   .quick button { font-size: 12px; padding: 5px 9px; }
 
   /* ---------- Top-3 recommendation table ---------- */
+  .aseed { white-space: nowrap; margin-right: 6px; }
   .top3 { white-space: normal; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 6px 0 4px; }
   .t3-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-bottom: 8px; }
   .t3-title { font-size: 15px; font-weight: 600; }
@@ -265,6 +266,13 @@ function probCell(label, x, target) {
          `<span class="bar${hit ? ' hit' : ''}"><span style="width:${w}%"></span></span></td>`;
 }
 
+function seedCell(r) {
+  if (r.ally_seeds && r.ally_seeds.length) {
+    return r.ally_seeds.map(a => `<span class="aseed" title="${escapeHtml(a.label)}">T${a.team} <b>#${a.seed}</b></span>`).join(' ');
+  }
+  return r.seeds && r.seeds.length ? escapeHtml(r.seeds.join(', ')) : '--';
+}
+
 function renderTop3(d) {
   const nextLbl = d.next_pick ? `Back at #${d.next_pick}` : 'Back later';
   const subBits = [];
@@ -289,7 +297,10 @@ function renderTop3(d) {
     }
     if (r.seeds && r.seeds.length) {
       const bye = r.byes == null ? '' : ` · ${r.byes} of ${r.seeds.length} alliance teams get a bye`;
-      detail += `<span class="k">Alliance</span><span>projected seeds ${r.seeds.join(', ')}${bye}</span>`;
+      const per = (r.ally_seeds && r.ally_seeds.length)
+        ? r.ally_seeds.map(a => `${escapeHtml(a.label)} <b>#${a.seed}</b>`).join(' &nbsp;·&nbsp; ')
+        : r.seeds.join(', ');
+      detail += `<span class="k">Alliance</span><span>projected seeds: ${per}${bye}</span>`;
     }
     let sim = `podium 2+ ${fmtPct(r.podium)} · sweep ${fmtPct(r.sweep)}`;
     if (r.ci_low != null && r.ci_high != null) sim += ` (95% CI ${fmtPct(r.ci_low)} to ${fmtPct(r.ci_high)})`;
@@ -314,9 +325,10 @@ function renderTop3(d) {
         probCell('Podium 2+', r.podium, d.targets.podium).replace('<td ', '<td class="gsep" ') +
         probCell('Sweep', r.sweep, d.targets.sweep) +
         probCell('Win title', r.champ, null) +
+        `<td class="gsep" data-label="Ally seeds">${seedCell(r)}</td>` +
         `<td class="gsep" data-label="Targets"><span class="pill ${r.targets_met ? 'met' : 'no'}">${r.targets_met ? 'Met' : 'Not met'}</span></td>` +
       `</tr>` +
-      `<tr class="detail${i === 0 ? '' : ' closed'}" data-i="${i}"><td colspan="10"><div class="dgrid">${detail}</div></td></tr>`;
+      `<tr class="detail${i === 0 ? '' : ' closed'}" data-i="${i}"><td colspan="11"><div class="dgrid">${detail}</div></td></tr>`;
   });
 
   const key = [
@@ -326,6 +338,7 @@ function renderTop3(d) {
     ['Podium 2+', 'chance at least 2 alliance teams finish in the playoff top 3'],
     ['Sweep', 'chance all 3 alliance teams finish 1-2-3 in the playoffs'],
     ['Win title', 'chance this team wins the championship'],
+    ['Ally seeds', 'projected regular-season seed of each alliance team if you take this player (T9 #2 = Team 9 projected 2nd)'],
     ['Targets', `Podium 2+ ≥ ${(d.targets.podium * 100).toFixed(0)}% and Sweep ≥ ${(d.targets.sweep * 100).toFixed(0)}% (shown in green when reached)`],
   ].map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join('');
 
@@ -333,8 +346,8 @@ function renderTop3(d) {
     `<div class="t3-head"><span class="t3-title">Top 3 picks · ${escapeHtml(d.team_label)}</span>` +
     `<span class="t3-sub">${escapeHtml(subBits.join(' · '))}</span></div>` +
     `<div class="t3-wrap"><table class="t3"><thead>` +
-      `<tr class="grp"><th></th><th class="l"></th><th colspan="3">Draft market</th><th class="gsep">Availability</th><th colspan="3" class="gsep">Simulated outcomes</th><th class="gsep">Goal</th></tr>` +
-      `<tr class="cols"><th></th><th class="l">Player</th><th>ADP</th><th>Cons.</th><th>Value</th><th class="gsep">${escapeHtml(nextLbl)}</th><th class="gsep">Podium 2+</th><th>Sweep</th><th>Win title</th><th class="gsep">Targets</th></tr>` +
+      `<tr class="grp"><th></th><th class="l"></th><th colspan="3">Draft market</th><th class="gsep">Availability</th><th colspan="3" class="gsep">Simulated outcomes</th><th class="gsep">Alliance</th><th class="gsep">Goal</th></tr>` +
+      `<tr class="cols"><th></th><th class="l">Player</th><th>ADP</th><th>Cons.</th><th>Value</th><th class="gsep">${escapeHtml(nextLbl)}</th><th class="gsep">Podium 2+</th><th>Sweep</th><th>Win title</th><th class="gsep">Ally seeds</th><th class="gsep">Targets</th></tr>` +
     `</thead><tbody>${body}</tbody></table></div>` +
     `<div class="t3-foot">Tap a row for the full breakdown.` +
       (lowSims ? ` <span class="warn">Some rows ran fewer than ${d.min_sims} simulations (live time limit), so treat their percentages as rough.</span>` : '') +

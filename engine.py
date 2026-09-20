@@ -2184,6 +2184,21 @@ def _t3_seeds(row):
         return []
 
 
+def _t3_seed_map(row):
+    """Projected regular-season seed of EACH alliance team: [{'team':9,'label':..,'seed':3}, ...],
+    ordered by team number (so the same ally is always in the same spot)."""
+    m = row.get("v13_alliance_seed_map") if hasattr(row, "get") else None
+    if not isinstance(m, dict):
+        return []
+    out = []
+    for t in sorted(m):
+        try:
+            out.append({"team": int(t), "label": team_label(int(t)), "seed": int(m[t])})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _t3_pct(x, digits=1):
     return "--" if x is None else f"{x * 100:.{digits}f}%"
 
@@ -2230,6 +2245,7 @@ def _t3_build_payload(top3, punt_note, tracker=None, team=None):
             "sims": int(_t3_num(r, "mc_trials", 0) or 0),
             "targets_met": bool(r.get("v15_target_met", False)),
             "seeds": seeds,
+            "ally_seeds": _t3_seed_map(r),
             "byes": None if byes is None else int(byes),
             "floor": _t3_num(r, "v13_category_floor"),
             "comp": _t3_num(r, "v15_complementarity"),
@@ -2320,7 +2336,11 @@ def _t3_render_text(p, width=100):
                           f"({_t3_pct(1 - r['still_there'])} he is gone)"))
         if r["seeds"]:
             bye = "" if r["byes"] is None else f" | {r['byes']} of {len(r['seeds'])} alliance teams get a bye"
-            lines.append(("Alliance", "projected seeds " + ", ".join(str(s) for s in r["seeds"]) + bye))
+            if r.get("ally_seeds"):
+                per_ally = " | ".join(f"{a['label']} #{a['seed']}" for a in r["ally_seeds"])
+                lines.append(("Alliance", "projected seeds: " + per_ally + bye))
+            else:
+                lines.append(("Alliance", "projected seeds " + ", ".join(str(s) for s in r["seeds"]) + bye))
         sim = [f"podium 2+ {_t3_pct(r['podium'])}", f"sweep {_t3_pct(r['sweep'])}"]
         if r["ci_low"] is not None and r["ci_high"] is not None:
             sim[-1] += f" (95% CI {_t3_pct(r['ci_low'])} to {_t3_pct(r['ci_high'])})"
@@ -2441,6 +2461,7 @@ def _v13_portfolio_metrics(tracker, rosters, late_round=False):
     portfolio_value=float(np.mean(ally_strength)) if len(ally_strength) else 0.0
     return {
         'seed':seed,'ally_seeds':tuple(sorted(ally_seeds)),
+        'ally_seed_map':{int(t):int(seed[t]) for t in sorted(allies) if t in seed},
         'top3_count':top3,'bye_count':bye,'two_plus_top3':two_plus,
         'balance':balance,'category_floor':category_floor,
         'collision_avoidance':collision_avoidance,
@@ -2743,6 +2764,7 @@ def _v15_simulation_batch_top3(tracker, team):
                   'v15_sweep_proxy':sweep_proxy,
                   'v15_dual_target_proxy':dual_proxy,
                   'v13_alliance_seeds':m['ally_seeds'],
+                  'v13_alliance_seed_map':m['ally_seed_map'],
                   'v13_top3_count':m['top3_count'],
                   'v13_bye_count':m['bye_count'],
                   'v13_balance':m['balance'],
@@ -2787,6 +2809,7 @@ def v15_batch_top3(tracker, team, deadline=None):
         r=base.loc[base.Player==cand].iloc[0].to_dict()
         r.update({'v13_portfolio_score':score,
                   'v13_alliance_seeds':m['ally_seeds'],
+                  'v13_alliance_seed_map':m['ally_seed_map'],
                   'v13_top3_count':m['top3_count'],
                   'v13_bye_count':m['bye_count'],
                   'v13_balance':m['balance'],
