@@ -63,6 +63,38 @@ command: `top3`, `status`, `catrank`, `h2hstand`, `playoffbracket`,
 buttons cover the common ones. Everyone typing into the page shares the
 exact same draft state -- there's no per-user draft.
 
+## The Top 3 recommendation view
+`top3` (and auto-recommend) now renders as a real table on the web page: one
+row per pick with draft-market numbers, the chance the player is still there at
+your next pick, the simulated podium/sweep/title odds, and a Met / Not met goal
+pill. Click a row for the full breakdown (alliance seeds, simulation CI and
+sample size, roster-health terms). A low-simulation-count warning shows when
+the live time budget cut the Monte Carlo short. The CLI prints the same
+information as a readable text report. This is display-only -- scoring and
+ranking in `recommend_top3()` are unchanged. `print_top3_table()` also stores a
+structured copy on `tracker.last_report`, which `app.py` sends to the page as
+`data` alongside the plain-text `output`.
+
+## Cat rank, H2H standings and playoff bracket views
+`catrank`, `h2hstand` and `playoffbracket` get the same treatment: an aligned
+text report on the CLI, and real HTML on the web page (a color-scaled category
+rank grid, a standings table with the bye line and the alliance's projected
+losses, and a round-by-round bracket with a podium strip). Scoring is unchanged.
+
+Each one can also be run against a single projection file. Prefix the command
+with the source: `espn`, `roto`, `rank`, `table`, or `fantrax`.
+
+| Command | Example (ESPN) | File used |
+|---|---|---|
+| category rankings | `espncatrank` | ESPN_Fantasy_Basketball_Projections_Complete.csv |
+| H2H standings | `espnh2hstand` (or `espnh2h`) | same |
+| playoff bracket | `espnbracket` (or `espnplayoffbracket`) | same |
+
+`roto` = rotoballerfantasyranking.csv, `rank` = fantasy_basketball_rankings.csv,
+`table` = table.csv, `fantrax` = the base Fantrax export. The page has a
+"Reports by projection source" panel with a button for every command/source
+combination (the *Blended* button is the original un-prefixed command).
+
 ## Notes / things you may want to change
 - `app.py` builds the tracker with `my_slot=9, teams=10, rounds=14,
   reversal_round=3, alliance_allies=(6, 7)` and `auto_recommend_teams=()`

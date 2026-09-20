@@ -2152,7 +2152,7 @@ def _v12_candidate_base_table(tracker, team):
 # PRESENTATION ONLY: nothing here changes how candidates are scored or ranked.
 # recommend_top3() still produces the same DataFrame; this section only turns
 # it into (a) a readable text report for the CLI / shared log and (b) a small
-# JSON-friendly payload (tracker.last_top3) the web page renders as an HTML
+# JSON-friendly payload (tracker.last_report) the web page renders as an HTML
 # table.
 # ---------------------------------------------------------------------------
 import textwrap as _textwrap
@@ -2357,14 +2357,14 @@ def _t3_render_text(p, width=100):
 def print_top3_table(top3, punt_note, tracker=None, team=None):
     """Print the top-3 recommendation as a readable report.
 
-    Also stores a structured copy on `tracker.last_top3` so the web page can
+    Also stores a structured copy on `tracker.last_report` so the web page can
     draw a real HTML table. Scoring/ranking logic is untouched.
     """
     payload = _t3_build_payload(top3, punt_note, tracker=tracker, team=team)
     text = _t3_render_text(payload)
     payload["text"] = text
     if tracker is not None:
-        tracker.last_top3 = payload
+        tracker.last_report = payload
     print(text)
 
     # Keep returning a DataFrame (callers ignore it today, but this preserves
@@ -3054,20 +3054,165 @@ def alliance_loss_table(tracker, weekly_games_df=None, rcol_prefix=None):
     return pd.DataFrame(rows, columns=cols)
 
 
+# ---------------------------------------------------------------------------
+# Readable displays for catrank / h2hstand / playoffbracket.
+#
+# PRESENTATION ONLY: the simulations (catrank_table, simulate_regular_season,
+# alliance_loss_table, simulate_playoff_bracket) are untouched. Each command
+# builds a plain-dict payload from their results, renders it as an aligned text
+# report, and stores the payload on `tracker.last_report` so the web page can
+# draw HTML tables from it.
+# ---------------------------------------------------------------------------
+
+# Friendly names for each projection file (keys match _SOURCE_COMMANDS labels).
+_SOURCE_INFO = {
+    "espn":    ("ESPN projections",       "ESPN_Fantasy_Basketball_Projections_Complete.csv"),
+    "roto":    ("RotoBaller projections", "rotoballerfantasyranking.csv"),
+    "rank":    ("Rankings file",          "fantasy_basketball_rankings.csv"),
+    "table":   ("table.csv projections",  "table.csv"),
+    "fantrax": ("Fantrax export",         "Fantrax-Players-2K27GMLeague.csv"),
+}
+
+
+def _source_desc(source_label):
+    if source_label:
+        key = source_label.lower().rstrip("_")
+        name, fname = _SOURCE_INFO.get(key, (source_label, ""))
+        return {"key": key, "name": name, "file": fname}
+    return {"key": "blend", "name": "Blended projections (default)", "file": ""}
+
+
+def _alliance_set(tracker):
+    return set(tracker.alliance_allies or ()) | {tracker.my_slot}
+
+
+def _team_info(t, alliance):
+    t = int(t)
+    return {"team": t, "name": TEAM_NAMES.get(t) or "", "label": team_label(t), "alliance": t in alliance}
+
+
+def _emit_report(tracker, payload, text):
+    """Print the text report and stash the structured copy for the web page."""
+    payload["text"] = text
+    tracker.last_report = payload
+    print(text)
+
+
+def _text_table(headers, rows, left=(0,)):
+    """Aligned plain-text table. `left` = column indexes to left-align."""
+    widths = [max(len(str(h)), *(len(str(r[i])) for r in rows)) if rows else len(str(h))
+              for i, h in enumerate(headers)]
+
+    def fmt(cells):
+        return "  ".join(str(c).ljust(widths[i]) if i in left else str(c).rjust(widths[i])
+                         for i, c in enumerate(cells))
+    lines = [fmt(headers), "  ".join("-" * w for w in widths)]
+    lines += [fmt(r) for r in rows]
+    return "\n".join(lines)
+
+
+def _tname(info, star=True):
+    return info["label"] + (" *" if star and info["alliance"] else "")
+
+
+def _fmt_cat_value(cat, v):
+    return f"{v * 100:.1f}%" if cat in ("FG%", "FT%") else f"{v:,.0f}"
+
+
+# ------------------------------- catrank ----------------------------------
+def _catrank_payload(tracker, values_df, ranks_df, source):
+    alliance = _alliance_set(tracker)
+    teams = []
+    for t in values_df.index:
+        rk = {c: int(ranks_df.loc[t, c]) for c in CAT_COLS}
+        info = _team_info(t, alliance)
+        info.update({
+            "players": int(values_df.loc[t, "players_drafted"]),
+            "values": {c: float(values_df.loc[t, c]) for c in CAT_COLS},
+            "ranks": rk,
+            "avg_rank": float(sum(rk.values())) / len(rk),
+        })
+        teams.append(info)
+    teams.sort(key=lambda x: (x["avg_rank"], x["team"]))
+    return {"kind": "catrank", "source": source, "categories": list(CAT_COLS),
+            "lower_is_better": ["TO"], "n_teams": len(teams), "teams": teams}
+
+
+def _catrank_text(p, width=110):
+    cats = p["categories"]
+    out = ["=" * width, f"CATEGORY RANKINGS  |  {p['source']['name']}"
+           + (f"  ({p['source']['file']})" if p["source"]["file"] else ""),
+           "Season totals, weighted by each player's real games. Rank 1 = best in that category"
+           " (turnovers: fewer is better).", "* = alliance team.  Teams are listed best average rank first.",
+           "=" * width, "", "RANK IN EACH CATEGORY (1 = best)"]
+    rows = [[_tname(t), f"{t['avg_rank']:.1f}"] + [str(t["ranks"][c]) for c in cats] for t in p["teams"]]
+    out.append(_text_table(["Team", "Avg"] + cats, rows))
+    out += ["", "SEASON TOTALS"]
+    rows = [[_tname(t)] + [_fmt_cat_value(c, t["values"][c]) for c in cats] for t in p["teams"]]
+    out.append(_text_table(["Team"] + cats, rows))
+    out.append("=" * width)
+    return "\n".join(out)
+
+
 def cmd_catrank(tracker, weekly_games_df=None, rcol_prefix=None, source_label=None):
     values_df, ranks_df = catrank_table(tracker, weekly_games_df, rcol_prefix=rcol_prefix)
-    alliance = set(tracker.alliance_allies or ()) | {tracker.my_slot}
-    v = values_df.round(2).copy()
-    v.insert(0, "team_name", [team_label(t) for t in v.index])
-    v.insert(1, "alliance", [t in alliance for t in v.index])
-    tag = f" [{source_label}]" if source_label else ""
-    print(f"\n--- catrank{tag}: season-total category totals (games-weighted) ---")
-    print(v.to_string())
-    r = ranks_df.copy()
-    r.insert(0, "team_name", [team_label(t) for t in r.index])
-    print("\n--- category ranks (1 = best) ---")
-    print(r.to_string())
+    payload = _catrank_payload(tracker, values_df, ranks_df, _source_desc(source_label))
+    _emit_report(tracker, payload, _catrank_text(payload))
     return values_df, ranks_df
+
+
+# ------------------------------- h2hstand ---------------------------------
+def _h2h_payload(tracker, standings, losses, source):
+    alliance = _alliance_set(tracker)
+    bye_n = int(getattr(tracker, "bye_seeds", DEFAULT_BYE_SEEDS))
+    rows = []
+    for _, r in standings.iterrows():
+        info = _team_info(r["team"], alliance)
+        info.update({"seed": int(r["seed"]), "w": int(r["W"]), "l": int(r["L"]), "t": int(r["T"]),
+                     "win_pct": float(r["win_pct"]), "cats_for": int(r["cats_for"]),
+                     "cats_against": int(r["cats_against"]), "cat_diff": int(r["cat_diff"]),
+                     "bye": int(r["seed"]) <= bye_n})
+        rows.append(info)
+    loss_rows = []
+    for _, r in losses.iterrows():
+        loss_rows.append({
+            "period": int(r["scoring_period"]), "weeks": str(r["weeks"]),
+            "team": _team_info(r["alliance_team"], alliance),
+            "opponent": _team_info(r["loses_to"], alliance),
+            "cats_won": int(r["cats_won"]), "cats_lost": int(r["cats_lost"]),
+        })
+    counts = {}
+    for lr in loss_rows:
+        counts[lr["team"]["team"]] = counts.get(lr["team"]["team"], 0) + 1
+    loss_counts = [dict(_team_info(t, alliance), losses=n) for t, n in sorted(counts.items())]
+    return {"kind": "h2hstand", "source": source, "bye_seeds": bye_n, "standings": rows,
+            "losses": loss_rows, "loss_counts": loss_counts,
+            "alliance_teams": [_team_info(t, alliance) for t in sorted(alliance)]}
+
+
+def _h2h_text(p, width=110):
+    src = p["source"]
+    out = ["=" * width, f"PROJECTED H2H STANDINGS  |  {src['name']}" + (f"  ({src['file']})" if src["file"] else ""),
+           f"Simulated regular season. Seeds 1-{p['bye_seeds']} get a playoff bye.  * = alliance team.", "=" * width, ""]
+    show_t = any(r["t"] for r in p["standings"])
+    rows = []
+    for r in p["standings"]:
+        rec = f"{r['w']}-{r['l']}" + (f"-{r['t']}" if show_t else "")
+        rows.append([str(r["seed"]), _tname(r), rec, f"{r['win_pct'] * 100:.1f}%",
+                     f"{r['cats_for']}-{r['cats_against']}", f"{r['cat_diff']:+d}", "Bye" if r["bye"] else ""])
+    out.append(_text_table(["Seed", "Team", "Record", "Win%", "Cats W-L", "Diff", ""], rows, left=(1, 6)))
+    out += ["", "ALLIANCE MATCHUPS PROJECTED TO LOSE", "-" * width]
+    if not p["losses"]:
+        out.append("  None -- the alliance is favored in every H2H matchup.")
+    else:
+        summ = ", ".join(f"{c['label']}: {c['losses']}" for c in p["loss_counts"])
+        out.append(f"  {len(p['losses'])} projected losses  ({summ})")
+        out.append("")
+        rows = [[str(l["period"]), l["weeks"], _tname(l["team"]),
+                 f"{l['cats_won']}-{l['cats_lost']}", _tname(l["opponent"])] for l in p["losses"]]
+        out.append(_text_table(["Period", "Week", "Alliance team", "Cats", "Loses to"], rows, left=(2, 4)))
+    out.append("=" * width)
+    return "\n".join(out)
 
 
 def cmd_h2hstand(tracker, weekly_games_df=None, rcol_prefix=None, source_label=None):
@@ -3078,23 +3223,13 @@ def cmd_h2hstand(tracker, weekly_games_df=None, rcol_prefix=None, source_label=N
     rprefix = rcol_prefix or tracker.rcol_prefix or _resolve_rcol_prefix(tracker.pool, None)
     standings, h2h_wins = simulate_regular_season(tracker.pool, tracker.rosters, wg,
                                                    rcol_prefix=rprefix, teams=tracker.teams)
-    alliance = set(tracker.alliance_allies or ()) | {tracker.my_slot}
+    losses = alliance_loss_table(tracker, wg, rcol_prefix=rprefix)
+    payload = _h2h_payload(tracker, standings, losses, _source_desc(source_label))
+    _emit_report(tracker, payload, _h2h_text(payload))
+    alliance = _alliance_set(tracker)
     s = standings.copy()
     s.insert(1, "team_name", s["team"].map(team_label))
     s.insert(2, "alliance", s["team"].isin(alliance))
-    tag = f" [{source_label}]" if source_label else ""
-    print(f"\n--- Table 1{tag}: projected regular-season H2H standings ---")
-    print(s.to_string(index=False))
-
-    losses = alliance_loss_table(tracker, wg, rcol_prefix=rprefix)
-    print(f"\n--- Table 2{tag}: regular-season matchups the alliance is projected to LOSE ---")
-    if losses.empty:
-        print("  (none projected -- the alliance is currently favored in every H2H matchup)")
-    else:
-        L = losses.copy()
-        L["alliance_team"] = L["alliance_team"].map(team_label)
-        L["loses_to"] = L["loses_to"].map(team_label)
-        print(L.to_string(index=False))
     return s, losses
 
 
@@ -3102,21 +3237,31 @@ def cmd_h2hstand(tracker, weekly_games_df=None, rcol_prefix=None, source_label=N
 # below. Add a new source by adding a row here (and to _SOURCE_PREFIX_MAP /
 # _SOURCE_PREFIX_ALIASES above if it's a brand-new file, not just a rename).
 _SOURCE_COMMANDS = {
-    "espncatrank":   ("catrank",   "espn"),
-    "espnh2hstand":  ("h2hstand",  "espn"),
-    "espnh2h":       ("h2hstand",  "espn"),
-    "rotocatrank":   ("catrank",   "roto"),
-    "rotoh2hstand":  ("h2hstand",  "roto"),
-    "rotoh2h":       ("h2hstand",  "roto"),
-    "rankcatrank":   ("catrank",   "rank"),   # fantasy_basketball_rankings.csv
-    "rankh2hstand":  ("h2hstand",  "rank"),
-    "rankh2h":       ("h2hstand",  "rank"),
-    "tablecatrank":  ("catrank",   "table"),  # table.csv
-    "tableh2hstand": ("h2hstand",  "table"),
-    "tableh2h":      ("h2hstand",  "table"),
-    "fantraxcatrank":  ("catrank",  "fantrax"),  # base Fantrax export, unblended
-    "fantraxh2hstand": ("h2hstand", "fantrax"),
-    "fantraxh2h":      ("h2hstand", "fantrax"),
+    "espncatrank":        ("catrank",        "espn"),
+    "espnh2hstand":       ("h2hstand",       "espn"),
+    "espnh2h":            ("h2hstand",       "espn"),
+    "espnplayoffbracket": ("playoffbracket", "espn"),
+    "espnbracket":        ("playoffbracket", "espn"),
+    "rotocatrank":        ("catrank",        "roto"),
+    "rotoh2hstand":       ("h2hstand",       "roto"),
+    "rotoh2h":            ("h2hstand",       "roto"),
+    "rotoplayoffbracket": ("playoffbracket", "roto"),
+    "rotobracket":        ("playoffbracket", "roto"),
+    "rankcatrank":        ("catrank",        "rank"),
+    "rankh2hstand":       ("h2hstand",       "rank"),
+    "rankh2h":            ("h2hstand",       "rank"),
+    "rankplayoffbracket": ("playoffbracket", "rank"),
+    "rankbracket":        ("playoffbracket", "rank"),
+    "tablecatrank":        ("catrank",        "table"),
+    "tableh2hstand":       ("h2hstand",       "table"),
+    "tableh2h":            ("h2hstand",       "table"),
+    "tableplayoffbracket": ("playoffbracket", "table"),
+    "tablebracket":        ("playoffbracket", "table"),
+    "fantraxcatrank":        ("catrank",        "fantrax"),
+    "fantraxh2hstand":       ("h2hstand",       "fantrax"),
+    "fantraxh2h":            ("h2hstand",       "fantrax"),
+    "fantraxplayoffbracket": ("playoffbracket", "fantrax"),
+    "fantraxbracket":        ("playoffbracket", "fantrax"),
 }
 
 
@@ -3138,28 +3283,107 @@ def cmd_source_h2hstand(tracker, source_label, weekly_games_df=None):
     return cmd_h2hstand(tracker, weekly_games_df, rcol_prefix=prefix, source_label=source_label)
 
 
-def _provisional_seeds(tracker, weekly_games_df=None):
+def _provisional_seeds(tracker, weekly_games_df=None, rcol_prefix=None):
     wg = weekly_games_df if weekly_games_df is not None else tracker.weekly_games_df
-    standings, h2h = simulate_regular_season(tracker.pool, tracker.rosters, wg, teams=tracker.teams)
+    standings, h2h = simulate_regular_season(tracker.pool, tracker.rosters, wg,
+                                              rcol_prefix=rcol_prefix, teams=tracker.teams)
     return real_season_seed_to_team(standings), standings, h2h
 
 
-def cmd_playoffbracket(tracker, weekly_games_df=None):
+def _bracket_payload(tracker, bracket, standings, source):
+    alliance = _alliance_set(tracker)
+
+    def match(m):
+        return {"seed_a": int(m["seed_a"]), "seed_b": int(m["seed_b"]),
+                "a": _team_info(m["team_a"], alliance), "b": _team_info(m["team_b"], alliance),
+                "cats_a": int(m["cats_a"]), "cats_b": int(m["cats_b"]),
+                "winner": int(m["winner"]), "tied": bool(m["tied_on_categories"])}
+
+    seed_to_team = bracket["seed_to_team"]
+    byes = [dict(_team_info(seed_to_team[s], alliance), seed=int(s)) for s in bracket["bye_seeds"]]
+    champ, runner = bracket["champion"], bracket["runner_up"]
+    third, fourth = bracket["third_place_winner"], bracket["fourth_place"]
+    podium = {champ, runner, third}
+    seeds_rows = []
+    for _, r in standings.iterrows():
+        info = _team_info(r["team"], alliance)
+        info.update({"seed": int(r["seed"]), "w": int(r["W"]), "l": int(r["L"]), "t": int(r["T"]),
+                     "win_pct": float(r["win_pct"]), "cat_diff": int(r["cat_diff"])})
+        seeds_rows.append(info)
+    return {
+        "kind": "playoffbracket", "source": source,
+        "byes": byes,
+        "rounds": [
+            {"name": "Round 1", "matches": [match(m) for m in bracket["round1"]]},
+            {"name": "Round 2", "matches": [match(m) for m in bracket["round2"]]},
+            {"name": "Semifinal", "matches": [match(m) for m in bracket["round3"]]},
+        ],
+        "final": match(bracket["final"]), "third_game": match(bracket["third_place"]),
+        "podium": {"champion": _team_info(champ, alliance), "runner_up": _team_info(runner, alliance),
+                   "third": _team_info(third, alliance), "fourth": _team_info(fourth, alliance)},
+        "alliance_on_podium": len(podium & alliance), "alliance_size": len(alliance),
+        "sweep": podium == alliance,
+        "seeds": seeds_rows,
+    }
+
+
+def _bracket_text(p, width=110):
+    src = p["source"]
+
+    def match_row(m):
+        a, b = m["a"], m["b"]
+        winner = a if m["winner"] == a["team"] else b
+        adv = winner["label"] + (" *" if winner["alliance"] else "") + ("  (tied on cats, higher seed)" if m["tied"] else "")
+        return [f"({m['seed_a']}) {_tname(a)}", f"{m['cats_a']}-{m['cats_b']}", f"({m['seed_b']}) {_tname(b)}", adv]
+
+    def match_table(matches):
+        return _text_table(["Team", "Cats", "Opponent", "Advances"],
+                           [match_row(m) for m in matches], left=(0, 2, 3))
+
+    out = ["=" * width, f"PROJECTED PLAYOFF BRACKET  |  {src['name']}" + (f"  ({src['file']})" if src["file"] else ""),
+           "Seeded from the projected regular-season standings.  * = alliance team.", "=" * width, "",
+           "SEEDS"]
+    rows = []
+    for r in p["seeds"]:
+        rec = f"{r['w']}-{r['l']}" + (f"-{r['t']}" if r["t"] else "")
+        bye = "Bye" if r["seed"] in {b["seed"] for b in p["byes"]} else "Round 1"
+        rows.append([str(r["seed"]), _tname(r), rec, f"{r['cat_diff']:+d}", bye])
+    out.append(_text_table(["Seed", "Team", "Record", "Cat diff", "Starts in"], rows, left=(1, 4)))
+    for rnd in p["rounds"]:
+        out += ["", rnd["name"].upper(), "-" * width, match_table(rnd["matches"])]
+    out += ["", "CHAMPIONSHIP", "-" * width, match_table([p["final"]]),
+            "", "3RD PLACE GAME", "-" * width, match_table([p["third_game"]])]
+    pod = p["podium"]
+    out += ["", "FINAL STANDINGS", "-" * width,
+            f"  1st  {_tname(pod['champion'])}", f"  2nd  {_tname(pod['runner_up'])}",
+            f"  3rd  {_tname(pod['third'])}", f"  4th  {_tname(pod['fourth'])}",
+            "", f"  Alliance teams on the podium: {p['alliance_on_podium']} of {p['alliance_size']}"
+            + ("  (SWEEP)" if p["sweep"] else ""), "=" * width]
+    return "\n".join(out)
+
+
+def cmd_playoffbracket(tracker, weekly_games_df=None, rcol_prefix=None, source_label=None):
     wg = weekly_games_df if weekly_games_df is not None else tracker.weekly_games_df
     if wg is None:
         print("  [!] No weekly_games_df available.")
         return None
-    seeds, standings, _ = _provisional_seeds(tracker, wg)
+    seeds, standings, _ = _provisional_seeds(tracker, wg, rcol_prefix=rcol_prefix)
     bracket = simulate_playoff_bracket(tracker.pool, tracker.rosters, seeds, wg,
                                         playoff_weeks=tracker.playoff_weeks,
-                                        bye_seeds=getattr(tracker, "bye_seeds", DEFAULT_BYE_SEEDS))
-    print("\n--- Provisional playoff bracket (from projected regular-season standings) ---")
-    s = standings.copy()
-    s.insert(1, "team_name", s["team"].map(team_label))
-    print(s.to_string(index=False))
-    print()
-    print(summarize_bracket(bracket))
+                                        bye_seeds=getattr(tracker, "bye_seeds", DEFAULT_BYE_SEEDS),
+                                        rcol_prefix=rcol_prefix)
+    payload = _bracket_payload(tracker, bracket, standings, _source_desc(source_label))
+    _emit_report(tracker, payload, _bracket_text(payload))
     return bracket
+
+
+def cmd_source_playoffbracket(tracker, source_label, weekly_games_df=None):
+    try:
+        prefix = _resolve_named_source_prefix(tracker.pool, source_label)
+    except ValueError as e:
+        print(f"  [!] {e}")
+        return None
+    return cmd_playoffbracket(tracker, weekly_games_df, rcol_prefix=prefix, source_label=source_label)
 
 
 def cmd_endofseason(tracker, weekly_games_df=None):
@@ -3232,11 +3456,12 @@ _LOOP_HELP = """Commands:
   top3 [team]                show the top-3 recommendation table (default: on the clock)
   catrank                    season-total (games-weighted) category rankings, all teams
   h2hstand                   projected H2H standings + matchups the alliance is losing
-  espncatrank / espnh2hstand    catrank / h2hstand scored on ESPN projections only
-  rotocatrank / rotoh2hstand    catrank / h2hstand scored on RotoBaller projections only
-  rankcatrank / rankh2hstand    catrank / h2hstand scored on fantasy_basketball_rankings.csv only
-  tablecatrank / tableh2hstand  catrank / h2hstand scored on table.csv only
-  fantraxcatrank / fantraxh2hstand  catrank / h2hstand scored on the base Fantrax export only
+  <source>catrank             category rankings scored on ONE projection file
+  <source>h2hstand            H2H standings + alliance losses on ONE projection file
+  <source>bracket             playoff bracket on ONE projection file
+      <source> = espn (ESPN csv) | roto (RotoBaller csv) | rank (fantasy_basketball_rankings.csv)
+                 | table (table.csv) | fantrax (base Fantrax export)
+      e.g. espncatrank, rotoh2hstand, tablebracket  (h2h and playoffbracket also work as espnh2h / espnplayoffbracket)
   playoffbracket              provisional playoff bracket from projected standings
   endofseason                 predicted champion/runner-up/3rd + alliance goal status
   snake                       switch remaining draft order to a pure snake draft
@@ -3277,6 +3502,8 @@ def dispatch_command(tracker, raw, weekly_games_df=None):
                 kind, source_label = _SOURCE_COMMANDS[low]
                 if kind == "catrank":
                     cmd_source_catrank(tracker, source_label, wg)
+                elif kind == "playoffbracket":
+                    cmd_source_playoffbracket(tracker, source_label, wg)
                 else:
                     cmd_source_h2hstand(tracker, source_label, wg)
             elif low in ("playoffbracket", "bracket"):

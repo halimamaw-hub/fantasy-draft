@@ -44,7 +44,7 @@ print("Draft board ready.")
 
 # Rolling log of every command run so far, shared by all clients.
 # Each entry: {id, ts, user, command, output, data}
-# `data` is optional structured info (currently the top-3 table) that the
+# `data` is optional structured info (top-3 table, catrank, h2hstand, playoff bracket) that the
 # page renders as HTML; `output` is always the plain-text version.
 HISTORY = []
 _next_id = 1
@@ -107,13 +107,13 @@ def api_command():
     if not text:
         return jsonify({"error": "empty command"}), 400
     with _lock:
-        TRACKER.last_top3 = None  # so a stale table never rides along with a different command
+        TRACKER.last_report = None  # so a stale table never rides along with a different command
         try:
             output = engine.dispatch_command(TRACKER, text, WEEKLY)
         except Exception as e:
             output = f"[!] Error: {e}"
-        data = getattr(TRACKER, "last_top3", None)
-        TRACKER.last_top3 = None
+        data = getattr(TRACKER, "last_report", None)
+        TRACKER.last_report = None
         _append_history(user, text, output, data)
         state = _state_snapshot()
     return jsonify({"output": output, "data": data, "state": state})

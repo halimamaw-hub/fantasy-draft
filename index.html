@@ -105,6 +105,77 @@
     .t3 .dgrid { grid-template-columns: 1fr; padding: 0 12px 10px; gap: 0; }
     .t3 .dgrid .k { margin-top: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
   }
+
+  /* ---------- Reports panel (buttons) ---------- */
+  .reports { padding: 0 16px 8px; }
+  .reports summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .rrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 5px; }
+  .rlabel { width: 74px; font-size: 12px; color: var(--muted); }
+  .rrow button { font-size: 12px; padding: 4px 9px; }
+  .rrow button.blend { border-color: #3a4a6b; }
+  #busy { font-size: 12px; color: #e0a84a; }
+  button:disabled { opacity: .5; cursor: progress; }
+
+  /* ---------- Shared report styling ---------- */
+  .rep { white-space: normal; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 6px 0 4px; }
+  .rep-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 4px; }
+  .rep-title { font-size: 15px; font-weight: 600; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; background: rgba(91,157,255,.15); color: var(--accent); }
+  .rep-sub { font-size: 12px; color: var(--muted); margin-bottom: 8px; line-height: 1.45; }
+  .rep-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+  table.rt { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.rt th { text-align: right; font-weight: 500; color: var(--muted); font-size: 11px; padding: 7px 10px; white-space: nowrap; border-bottom: 1px solid var(--border); }
+  table.rt td { padding: 7px 10px; text-align: right; white-space: nowrap; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  table.rt tbody tr:first-child td { border-top: none; }
+  table.rt th.l, table.rt td.l { text-align: left; }
+  table.rt tr.ally td:first-child, table.rt tr.ally td.l:first-of-type { box-shadow: inset 3px 0 0 var(--accent); }
+  table.rt tr.ally { background: rgba(91,157,255,.06); }
+  table.rt tr.cut td { border-bottom: 2px dashed #3a4256; }
+  .tm b { font-weight: 600; } .tmn { color: var(--muted); font-size: 12px; } .star { color: #f0b840; font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill.bye { background: rgba(76,175,125,.18); color: var(--good); }
+  .pos-n { color: var(--good); } .neg-n { color: #e0706a; }
+  .muted { color: var(--muted); }
+  .rep-foot { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .rep h4 { margin: 14px 0 6px; font-size: 13px; font-weight: 600; }
+
+  /* catrank */
+  table.rt td.cc { text-align: center; min-width: 62px; padding: 5px 8px; line-height: 1.15; }
+  table.rt td.cc .rk { display: block; font-weight: 700; font-size: 14px; }
+  table.rt td.cc .cv { display: block; font-size: 10.5px; opacity: .8; }
+  table.rt th.c { text-align: center; }
+
+  /* h2h losses */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .lchip { padding: 3px 9px; border-radius: 10px; background: #232837; font-size: 12px; }
+  .lchip b { color: #e0706a; }
+  .scroll-y { max-height: 340px; overflow-y: auto; }
+
+  /* bracket */
+  .podium { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin-bottom: 8px; }
+  .ptile { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .ptile.first { border-color: #f0b840; }
+  .ptile .pl { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .ptile .pn { font-size: 13px; margin-top: 2px; }
+  .sweep-tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; background: rgba(76,175,125,.2); color: var(--good); margin-left: 6px; }
+  .bgrid { display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+  .bcol h5 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  .mc { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; font-size: 12.5px; }
+  .ml { display: flex; align-items: center; gap: 6px; padding: 6px 9px; color: var(--muted); }
+  .ml + .ml { border-top: 1px solid var(--border); }
+  .ml.win { color: var(--text); background: rgba(91,157,255,.10); }
+  .ml.win .tm b { color: #fff; }
+  .ml .sd { width: 22px; font-size: 11px; color: var(--muted); }
+  .ml .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ml .sc { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .mc .note { font-size: 10.5px; color: #e0a84a; padding: 0 9px 5px; }
+  .byebox { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  @media (max-width: 720px) {
+    .podium { grid-template-columns: 1fr 1fr; }
+    .bgrid { grid-template-columns: 1fr; }
+    table.rt td, table.rt th { padding: 6px 7px; }
+    .rlabel { width: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -116,12 +187,14 @@
 <div class="quick">
   <button data-cmd="top3">Top 3</button>
   <button data-cmd="status">Status</button>
-  <button data-cmd="catrank">Cat Rank</button>
-  <button data-cmd="h2hstand">H2H Stand</button>
-  <button data-cmd="playoffbracket">Bracket</button>
   <button data-cmd="undo">Undo</button>
   <button data-cmd="help">Help</button>
+  <span id="busy"></span>
 </div>
+<details class="reports" id="reports" open>
+  <summary>Reports by projection source</summary>
+  <div id="reportRows"></div>
+</details>
 
 <main><div id="log"></div></main>
 
@@ -238,16 +311,126 @@ function renderTop3(d) {
     `</div></div>`;
 }
 
+
+const REPORT_SOURCES = [
+  ['',        'Blended',  'Default: blended ensemble of all projection files'],
+  ['espn',    'ESPN',     'ESPN_Fantasy_Basketball_Projections_Complete.csv'],
+  ['roto',    'RotoBaller','rotoballerfantasyranking.csv'],
+  ['rank',    'Rankings', 'fantasy_basketball_rankings.csv'],
+  ['table',   'table.csv','table.csv'],
+  ['fantrax', 'Fantrax',  'Fantrax-Players-2K27GMLeague.csv'],
+];
+const REPORT_KINDS = [
+  ['Cat Rank',  'catrank'],
+  ['H2H Stand', 'h2hstand'],
+  ['Bracket',   'playoffbracket'],
+];
+(function buildReportButtons() {
+  const box = document.getElementById('reportRows');
+  REPORT_KINDS.forEach(([label, kind]) => {
+    const row = document.createElement('div');
+    row.className = 'rrow';
+    row.innerHTML = `<span class="rlabel">${label}</span>`;
+    REPORT_SOURCES.forEach(([key, name, file]) => {
+      const b = document.createElement('button');
+      b.textContent = name;
+      b.title = file;
+      b.dataset.cmd = key + kind;
+      if (!key) b.className = 'blend';
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+  });
+  if (window.matchMedia('(max-width: 720px)').matches) document.getElementById('reports').open = false;
+})();
+
+function srcChip(src) {
+  return `<span class="chip" title="${escapeHtml(src.file || 'Blended ensemble of all projection files')}">${escapeHtml(src.name)}</span>`;
+}
+function teamHtml(t) {
+  return `<span class="tm"><b>Team ${t.team}</b>${t.name ? ` <span class="tmn">${escapeHtml(t.name)}</span>` : ''}` +
+         `${t.alliance ? ' <span class="star" title="Alliance team">★</span>' : ''}</span>`;
+}
+function fmtCat(c, v) { return (c === 'FG%' || c === 'FT%') ? (v * 100).toFixed(1) + '%' : Math.round(v).toLocaleString(); }
+function heat(rank, n) { const f = n > 1 ? (rank - 1) / (n - 1) : 0; return `hsla(${Math.round(130 * (1 - f))},50%,36%,.55)`; }
+function signed(n) { return (n > 0 ? '+' : '') + n; }
+function sgnCls(n) { return n > 0 ? 'pos-n' : (n < 0 ? 'neg-n' : ''); }
+
+function renderCatrank(d) {
+  const head = d.categories.map(c => `<th class="c">${c}</th>`).join('');
+  const rows = d.teams.map((t, i) =>
+    `<tr class="${t.alliance ? 'ally' : ''}"><td class="l muted">${i + 1}</td><td class="l">${teamHtml(t)}</td>` +
+    `<td><b>${t.avg_rank.toFixed(1)}</b></td>` +
+    d.categories.map(c => `<td class="cc" style="background:${heat(t.ranks[c], d.n_teams)}"><span class="rk">${t.ranks[c]}</span><span class="cv">${fmtCat(c, t.values[c])}</span></td>`).join('') +
+    `</tr>`).join('');
+  return `<div class="rep"><div class="rep-head"><span class="rep-title">Category rankings</span>${srcChip(d.source)}</div>` +
+    `<div class="rep-sub">Big number = rank in that category (1 = best, green). Small number = projected season total, weighted by each player's real games. ` +
+    `Turnovers: fewer is better. Teams are sorted by average rank. <span class="star">★</span> = alliance team.</div>` +
+    `<div class="rep-wrap"><table class="rt"><thead><tr><th class="l">#</th><th class="l">Team</th><th>Avg rank</th>${head}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+function renderH2h(d) {
+  const rows = d.standings.map(r =>
+    `<tr class="${r.alliance ? 'ally' : ''}${r.seed === d.bye_seeds ? ' cut' : ''}"><td class="l"><b>${r.seed}</b></td><td class="l">${teamHtml(r)}</td>` +
+    `<td>${r.w}-${r.l}${r.t ? '-' + r.t : ''}</td><td>${(r.win_pct * 100).toFixed(1)}%</td>` +
+    `<td>${r.cats_for}-${r.cats_against}</td><td class="${sgnCls(r.cat_diff)}">${signed(r.cat_diff)}</td>` +
+    `<td class="l">${r.bye ? '<span class="pill bye">Bye</span>' : ''}</td></tr>`).join('');
+  let losses;
+  if (!d.losses.length) {
+    losses = `<div class="rep-sub">None projected -- the alliance is favored in every H2H matchup.</div>`;
+  } else {
+    const chips = d.loss_counts.map(c => `<span class="lchip">${teamHtml(c)} <b>${c.losses}</b> loss${c.losses === 1 ? '' : 'es'}</span>`).join('');
+    const lrows = d.losses.map(l =>
+      `<tr><td class="l muted">P${l.period}${l.weeks !== String(l.period) ? ` (wk ${escapeHtml(l.weeks)})` : ''}</td><td class="l">${teamHtml(l.team)}</td>` +
+      `<td class="neg-n">${l.cats_won}-${l.cats_lost}</td><td class="l">${teamHtml(l.opponent)}</td></tr>`).join('');
+    losses = `<div class="chips">${chips}</div><div class="rep-wrap scroll-y"><table class="rt"><thead><tr><th class="l">Period</th><th class="l">Alliance team</th><th>Cats</th><th class="l">Loses to</th></tr></thead><tbody>${lrows}</tbody></table></div>`;
+  }
+  return `<div class="rep"><div class="rep-head"><span class="rep-title">Projected H2H standings</span>${srcChip(d.source)}</div>` +
+    `<div class="rep-sub">Simulated regular season. Seeds 1-${d.bye_seeds} get a playoff bye (dashed line). <span class="star">★</span> = alliance team.</div>` +
+    `<div class="rep-wrap"><table class="rt"><thead><tr><th class="l">Seed</th><th class="l">Team</th><th>Record</th><th>Win%</th><th>Cats W-L</th><th>Diff</th><th class="l"></th></tr></thead><tbody>${rows}</tbody></table></div>` +
+    `<h4>Alliance matchups projected to lose${d.losses.length ? ` (${d.losses.length})` : ''}</h4>${losses}</div>`;
+}
+
+function matchCard(m) {
+  const line = (t, seed, cats, won) =>
+    `<div class="ml${won ? ' win' : ''}"><span class="sd">(${seed})</span><span class="nm">${teamHtml(t)}</span><span class="sc">${cats}</span></div>`;
+  return `<div class="mc">${line(m.a, m.seed_a, m.cats_a, m.winner === m.a.team)}${line(m.b, m.seed_b, m.cats_b, m.winner === m.b.team)}` +
+         `${m.tied ? '<div class="note">Tied on categories; higher seed advances</div>' : ''}</div>`;
+}
+
+function renderBracket(d) {
+  const pod = d.podium;
+  const tile = (label, t, cls) => `<div class="ptile ${cls || ''}"><div class="pl">${label}</div><div class="pn">${teamHtml(t)}</div></div>`;
+  const podium = `<div class="podium">${tile('🏆 Champion', pod.champion, 'first')}${tile('2nd', pod.runner_up)}${tile('3rd', pod.third)}${tile('4th', pod.fourth)}</div>`;
+  const cols = d.rounds.map((r, i) => {
+    let extra = '';
+    if (i === 0) {
+      extra = `<div class="byebox"><b>Byes into Round 2:</b><br>${d.byes.map(b => `(${b.seed}) ${teamHtml(b)}`).join('<br>')}</div>`;
+    }
+    return `<div class="bcol"><h5>${escapeHtml(r.name)}</h5>${r.matches.map(matchCard).join('')}${extra}</div>`;
+  }).join('');
+  const finalCol = `<div class="bcol"><h5>Championship</h5>${matchCard(d.final)}<h5 style="margin-top:12px">3rd place game</h5>${matchCard(d.third_game)}</div>`;
+  const srows = d.seeds.map(r =>
+    `<tr class="${r.alliance ? 'ally' : ''}"><td class="l"><b>${r.seed}</b></td><td class="l">${teamHtml(r)}</td><td>${r.w}-${r.l}${r.t ? '-' + r.t : ''}</td><td class="${sgnCls(r.cat_diff)}">${signed(r.cat_diff)}</td></tr>`).join('');
+  return `<div class="rep"><div class="rep-head"><span class="rep-title">Projected playoff bracket</span>${srcChip(d.source)}</div>` +
+    `<div class="rep-sub">Seeded from the projected regular-season standings. Winner of each match is highlighted. ` +
+    `Alliance teams on the podium: <b>${d.alliance_on_podium} of ${d.alliance_size}</b>${d.sweep ? '<span class="sweep-tag">SWEEP</span>' : ''}. <span class="star">★</span> = alliance team.</div>` +
+    `${podium}<div class="bgrid">${cols}${finalCol}</div>` +
+    `<details class="rep-foot"><summary style="cursor:pointer;color:var(--accent)">Regular-season seeding</summary><div class="rep-wrap" style="margin-top:6px"><table class="rt"><thead><tr><th class="l">Seed</th><th class="l">Team</th><th>Record</th><th>Cat diff</th></tr></thead><tbody>${srows}</tbody></table></div></details></div>`;
+}
+
+const RENDERERS = { top3: renderTop3, catrank: renderCatrank, h2hstand: renderH2h, playoffbracket: renderBracket };
+
 function appendEntry(e) {
   const div = document.createElement('div');
   div.className = 'entry';
   const t = new Date(e.ts * 1000).toLocaleTimeString();
   let bodyHtml;
-  if (e.data && e.data.kind === 'top3') {
+  if (e.data && RENDERERS[e.data.kind]) {
     // Show the real table instead of the plain-text copy of it; keep any other
     // output from the same command (e.g. the pick confirmation, timing line).
     const rest = (e.output || '').replace(e.data.text || '', '').trim();
-    bodyHtml = (rest ? `<div class="t3-rest">${escapeHtml(rest)}</div>` : '') + renderTop3(e.data);
+    bodyHtml = (rest ? `<div class="t3-rest">${escapeHtml(rest)}</div>` : '') + RENDERERS[e.data.kind](e.data);
   } else {
     bodyHtml = `<div>${escapeHtml(e.output) || '<i>(no output)</i>'}</div>`;
   }
@@ -281,20 +464,34 @@ async function poll() {
 }
 poll();
 
+let inflight = 0;
+const busyEl = document.getElementById('busy');
+function setBusy(on) {
+  document.querySelectorAll('button[data-cmd]').forEach(b => { b.disabled = on; });
+}
 async function sendCommand(text) {
   if (!text.trim()) return;
   cmdEl.value = '';
-  await fetch('/api/command', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ text, user: nameEl.value || 'anon' }),
-  });
+  inflight++;
+  busyEl.textContent = `Running "${text}"...`;
+  setBusy(true);
+  try {
+    await fetch('/api/command', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, user: nameEl.value || 'anon' }),
+    });
+  } catch (err) { /* poll will still show anything that landed */ }
+  finally {
+    inflight--;
+    if (!inflight) { busyEl.textContent = ''; setBusy(false); }
+  }
   // next poll (within 2s) will pick up the new entry for everyone, including us
 }
 
 document.getElementById('send').addEventListener('click', () => sendCommand(cmdEl.value));
 cmdEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCommand(cmdEl.value); });
-document.querySelectorAll('.quick button').forEach(b => {
+document.querySelectorAll('button[data-cmd]').forEach(b => {
   b.addEventListener('click', () => sendCommand(b.dataset.cmd));
 });
 </script>
