@@ -95,9 +95,27 @@ with the source: `espn`, `roto`, `rank`, `table`, or `fantrax`.
 "Reports by projection source" panel with a button for every command/source
 combination (the *Blended* button is the original un-prefixed command).
 
+## Resetting the draft
+The **Reset draft** button (top right of the page, or typing `reset` in the
+command box) opens an "Are you sure you want to reset?" dialog that shows how
+many picks will be lost. Cancel, Esc, or clicking outside closes it without
+doing anything. Confirming rebuilds a fresh draft on the server -- every pick,
+the shared log, and any `snake`/`3rr` switch are wiped and it goes back to pick
+#1 -- and every connected browser clears its screen and shows a "Draft reset by
+<name>" line. Behind it is `POST /api/reset`, which refuses to run unless the
+request body contains `{"confirm": true}`.
+
+## Player pool size
+The draftable pool is now the top **400** players (was 350), which brings in
+names like Cam Thomas, Mike Conley, Buddy Hield and Kevin Love. Change it
+without editing code by setting a `POOL_SIZE` environment variable (on Render:
+Environment tab), or edit `DEFAULT_POOL_SIZE` at the bottom of `engine.py`.
+A bigger pool means slightly more work per recommendation; the top-3 time
+budget still applies.
+
 ## Notes / things you may want to change
 - `app.py` builds the tracker with `my_slot=9, teams=10, rounds=14,
-  reversal_round=3, alliance_allies=(6, 7)` and `auto_recommend_teams=()`
+  reversal_round=3, alliance_allies=(6, 7)` (plus the pool size above) and `auto_recommend_teams=()`
   (auto-recommend is off by default on the web version so the shared log
   doesn't get a recommendation block after every single pick -- turn it
   back on by editing that line if you want it).

@@ -176,13 +176,43 @@
     table.rt td, table.rt th { padding: 6px 7px; }
     .rlabel { width: 100%; }
   }
+
+  /* ---------- Reset button + confirmation dialog ---------- */
+  header { justify-content: flex-start; }
+  #resetBtn { margin-left: auto; font-size: 12px; padding: 5px 10px; color: #e0706a; border-color: #5a2f33; background: transparent; }
+  #resetBtn:hover { border-color: #e0706a; background: rgba(224,112,106,.08); }
+  .resetnote { color: #e0a84a; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; font-size: 13px; }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .modal-backdrop.open { display: flex; }
+  .modal { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  .modal h2 { margin: 0 0 8px; font-size: 17px; }
+  .modal p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
+  .modal .warn-box { background: rgba(224,112,106,.10); border: 1px solid #5a2f33; border-radius: 8px; padding: 9px 12px; font-size: 13px; color: #f0b3ae; margin-bottom: 14px; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal button { padding: 8px 14px; font-size: 14px; }
+  .modal button.danger { background: #b3403a; border-color: #b3403a; color: #fff; font-weight: 600; }
+  .modal button.danger:hover { background: #c94c45; border-color: #c94c45; }
+  .modal button.danger:disabled { opacity: .6; }
 </style>
 </head>
 <body>
 <header>
   <h1>🏀 Draft Day</h1>
   <div id="state">Loading state…</div>
+  <button id="resetBtn" title="Erase every pick and start the draft over">Reset draft</button>
 </header>
+
+<div class="modal-backdrop" id="resetModal" role="dialog" aria-modal="true" aria-labelledby="resetTitle" aria-describedby="resetDesc">
+  <div class="modal">
+    <h2 id="resetTitle">Are you sure you want to reset?</h2>
+    <p id="resetDesc">This erases <b id="resetPicks">every pick</b> and the shared log <b>for everyone connected</b>, and puts the draft back on pick #1.</p>
+    <div class="warn-box">This can't be undone.</div>
+    <div class="actions">
+      <button id="resetCancel">Cancel</button>
+      <button id="resetConfirm" class="danger">Yes, reset everything</button>
+    </div>
+  </div>
+</div>
 
 <div class="quick">
   <button data-cmd="top3">Top 3</button>
@@ -214,8 +244,10 @@ nameEl.addEventListener('change', () => localStorage.setItem('draftUser', nameEl
 
 let sinceId = 0;
 
+let picksLogged = 0;
 function renderState(s) {
   if (!s) return;
+  picksLogged = s.picks || 0;
   stateEl.innerHTML = s.draft_complete
     ? '<b>Draft complete</b>'
     : `Pick <b>#${s.overall}</b> · Round <b>${s.round}</b> · On the clock: <b>Team ${s.on_the_clock}</b>`;
@@ -419,14 +451,17 @@ function renderBracket(d) {
     `<details class="rep-foot"><summary style="cursor:pointer;color:var(--accent)">Regular-season seeding</summary><div class="rep-wrap" style="margin-top:6px"><table class="rt"><thead><tr><th class="l">Seed</th><th class="l">Team</th><th>Record</th><th>Cat diff</th></tr></thead><tbody>${srows}</tbody></table></div></details></div>`;
 }
 
-const RENDERERS = { top3: renderTop3, catrank: renderCatrank, h2hstand: renderH2h, playoffbracket: renderBracket };
+const RENDERERS = {
+  top3: renderTop3, catrank: renderCatrank, h2hstand: renderH2h, playoffbracket: renderBracket };
 
 function appendEntry(e) {
   const div = document.createElement('div');
   div.className = 'entry';
   const t = new Date(e.ts * 1000).toLocaleTimeString();
   let bodyHtml;
-  if (e.data && RENDERERS[e.data.kind]) {
+  if (e.data && e.data.kind === 'reset') {
+    bodyHtml = `<div class="resetnote">↺ ${escapeHtml(e.output)}</div>`;
+  } else if (e.data && RENDERERS[e.data.kind]) {
     // Show the real table instead of the plain-text copy of it; keep any other
     // output from the same command (e.g. the pick confirmation, timing line).
     const rest = (e.output || '').replace(e.data.text || '', '').trim();
@@ -453,12 +488,20 @@ function escapeHtml(s) {
   return (s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+let knownEpoch = -1;
+function clearLog() { logEl.innerHTML = ''; sinceId = 0; }
+
 async function poll() {
   try {
-    const res = await fetch(`/api/history?since=${sinceId}`);
+    const res = await fetch(`/api/history?since=${sinceId}&epoch=${knownEpoch}`);
     const data = await res.json();
-    for (const e of data.entries) { appendEntry(e); sinceId = e.id; }
-    renderState(data.state);
+    // A response from before a reset we already handled locally: ignore it.
+    if (data.epoch >= knownEpoch) {
+      if (data.reset) clearLog();          // someone reset the draft: start clean
+      knownEpoch = data.epoch;
+      for (const e of data.entries) { appendEntry(e); sinceId = e.id; }
+      renderState(data.state);
+    }
   } catch (err) { /* network hiccup, just retry next tick */ }
   finally { setTimeout(poll, 2000); }
 }
@@ -469,8 +512,54 @@ const busyEl = document.getElementById('busy');
 function setBusy(on) {
   document.querySelectorAll('button[data-cmd]').forEach(b => { b.disabled = on; });
 }
+// ---- Reset (always goes through the confirmation dialog) ----
+const resetModal = document.getElementById('resetModal');
+const resetConfirmBtn = document.getElementById('resetConfirm');
+const resetCancelBtn = document.getElementById('resetCancel');
+function openResetDialog() {
+  document.getElementById('resetPicks').textContent =
+    picksLogged > 0 ? `all ${picksLogged} logged pick${picksLogged === 1 ? '' : 's'}` : 'every pick (none logged yet)';
+  resetConfirmBtn.disabled = false;
+  resetConfirmBtn.textContent = 'Yes, reset everything';
+  resetModal.classList.add('open');
+  setTimeout(() => resetCancelBtn.focus(), 0);   // default to the safe choice (deferred so the Enter that opened this doesn't also click it)
+}
+function closeResetDialog() { resetModal.classList.remove('open'); }
+document.getElementById('resetBtn').addEventListener('click', openResetDialog);
+resetCancelBtn.addEventListener('click', closeResetDialog);
+resetModal.addEventListener('click', (e) => { if (e.target === resetModal) closeResetDialog(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && resetModal.classList.contains('open')) closeResetDialog(); });
+resetConfirmBtn.addEventListener('click', async () => {
+  resetConfirmBtn.disabled = true;
+  resetConfirmBtn.textContent = 'Resetting...';
+  busyEl.textContent = 'Resetting the draft...';
+  setBusy(true);
+  try {
+    const res = await fetch('/api/reset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ confirm: true, user: nameEl.value || 'anon' }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'reset failed');
+    // Wipe our own log right away; the next poll brings in the "draft reset" entry.
+    knownEpoch = data.state.epoch;
+    clearLog();
+    renderState(data.state);
+    closeResetDialog();
+  } catch (err) {
+    resetConfirmBtn.disabled = false;
+    resetConfirmBtn.textContent = 'Yes, reset everything';
+    alert('Reset did not go through: ' + err.message);
+  } finally {
+    busyEl.textContent = '';
+    setBusy(false);
+  }
+});
+
 async function sendCommand(text) {
   if (!text.trim()) return;
+  if (text.trim().toLowerCase() === 'reset') { cmdEl.value = ''; openResetDialog(); return; }
   cmdEl.value = '';
   inflight++;
   busyEl.textContent = `Running "${text}"...`;
@@ -490,7 +579,7 @@ async function sendCommand(text) {
 }
 
 document.getElementById('send').addEventListener('click', () => sendCommand(cmdEl.value));
-cmdEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCommand(cmdEl.value); });
+cmdEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCommand(cmdEl.value); } });
 document.querySelectorAll('button[data-cmd]').forEach(b => {
   b.addEventListener('click', () => sendCommand(b.dataset.cmd));
 });

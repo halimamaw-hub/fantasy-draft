@@ -1185,7 +1185,7 @@ class DraftTracker:
     # inside project_remaining_rosters -> predict_opponent_pick ->
     # category_weights -> category_breakdown -> _team_cat_totals, with 1140
     # calls to _team_cat_totals. Each of those ran a pandas .isin() over the
-    # whole 350-row pool and nine Series.sum()s, to add up at most 14 numbers
+    # whole player pool and nine Series.sum()s, to add up at most 14 numbers
     # that had not changed since the last time it was asked.
     #
     # The z-line for a player is fixed for the whole draft, so it is cached
@@ -3546,8 +3546,11 @@ def run_draft_loop(tracker, weekly_games_df=None):
         print(dispatch_command(tracker, raw, wg), end="")
 
 
+DEFAULT_POOL_SIZE = 400  # how many players (best ADP/rank first) are draftable
+
+
 def build_tracker(data_dir=".", my_slot=9, teams=10, rounds=14, reversal_round=3,
-                   alliance_allies=(6, 7), auto_recommend_teams=()):
+                   alliance_allies=(6, 7), auto_recommend_teams=(), pool_size=DEFAULT_POOL_SIZE):
     """Loads all CSVs from data_dir and returns (tracker, weekly_games_df),
     same pipeline as the original __main__ block but with a configurable
     data directory and no hardcoded auto-recommend/alliance (the web app
@@ -3562,7 +3565,7 @@ def build_tracker(data_dir=".", my_slot=9, teams=10, rounds=14, reversal_round=3
     PROJ4_PATH = data_dir / "rotoballerfantasyranking.csv"
     SCHEDULE = data_dir / "NBASchedule-Sheet1.csv"
 
-    pool = load_players(str(CSV_PATH), pool_size=350)
+    pool = load_players(str(CSV_PATH), pool_size=pool_size)
     pool = merge_projections(
         pool,
         proj1_path=str(PROJ1_PATH) if PROJ1_PATH.exists() else None,

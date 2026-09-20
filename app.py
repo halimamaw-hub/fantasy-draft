@@ -34,13 +34,30 @@ app = Flask(__name__)
 # once is exactly the concurrency this needs to guard against.
 # ---------------------------------------------------------------------
 _lock = threading.Lock()
-print("Loading projections and building the draft board (a few seconds)...")
-TRACKER, WEEKLY = engine.build_tracker(
-    data_dir=DATA_DIR,
-    my_slot=9, teams=10, rounds=14, reversal_round=3,
-    alliance_allies=(6, 7), auto_recommend_teams=(),  # web UI: nobody's auto-spammed
-)
+_reset_lock = threading.Lock()  # only one reset/rebuild at a time
+
+# How many players are draftable, best ADP/rank first. Override with the
+# POOL_SIZE environment variable (e.g. on Render) without touching code.
+POOL_SIZE = int(os.environ.get("POOL_SIZE", engine.DEFAULT_POOL_SIZE))
+
+
+def _build_draft():
+    """Builds a brand-new, empty draft (same settings every time)."""
+    return engine.build_tracker(
+        data_dir=DATA_DIR,
+        my_slot=9, teams=10, rounds=14, reversal_round=3,
+        alliance_allies=(6, 7), auto_recommend_teams=(),  # web UI: nobody's auto-spammed
+        pool_size=POOL_SIZE,
+    )
+
+
+print(f"Loading projections and building the draft board ({POOL_SIZE} players, a few seconds)...")
+TRACKER, WEEKLY = _build_draft()
 print("Draft board ready.")
+
+# Bumped every time the draft is reset. Browsers compare it to the one they
+# last saw and wipe their log when it changes.
+EPOCH = 0
 
 # Rolling log of every command run so far, shared by all clients.
 # Each entry: {id, ts, user, command, output, data}
@@ -75,6 +92,8 @@ def _state_snapshot():
         "draft_complete": on_clock is None,
         "teams": TRACKER.teams,
         "rounds": TRACKER.rounds,
+        "picks": TRACKER.overall - 1,
+        "epoch": EPOCH,
     }
 
 
@@ -91,12 +110,18 @@ def api_state():
 
 @app.route("/api/history")
 def api_history():
-    """Poll endpoint: ?since=<last id you already have> -> new entries only."""
+    """Poll endpoint: ?since=<last id you already have>&epoch=<epoch you last saw>.
+    Returns new entries only -- unless the draft was reset since `epoch`, in which
+    case it returns the whole (fresh) log and reset=true so the page clears itself."""
     since = request.args.get("since", 0, type=int)
+    client_epoch = request.args.get("epoch", -1, type=int)
     with _lock:
+        reset = client_epoch != EPOCH
+        if reset:
+            since = 0
         new_entries = [h for h in HISTORY if h["id"] > since]
         state = _state_snapshot()
-    return jsonify({"entries": new_entries, "state": state})
+    return jsonify({"entries": new_entries, "state": state, "epoch": state["epoch"], "reset": reset})
 
 
 @app.route("/api/command", methods=["POST"])
@@ -117,6 +142,39 @@ def api_command():
         _append_history(user, text, output, data)
         state = _state_snapshot()
     return jsonify({"output": output, "data": data, "state": state})
+
+
+@app.route("/api/reset", methods=["POST"])
+def api_reset():
+    """Erases the whole draft: every pick, the shared log, and any draft-mode
+    change (snake/3rr). Needs {"confirm": true} in the body so a stray request
+    can't wipe a draft by accident -- the web page only sends it after the
+    user clicks through the confirmation dialog."""
+    global TRACKER, WEEKLY, EPOCH
+    body = request.get_json(force=True, silent=True) or {}
+    user = (body.get("user") or "").strip() or "anon"
+    if body.get("confirm") is not True:
+        return jsonify({"error": "reset needs confirm=true"}), 400
+    if not _reset_lock.acquire(blocking=False):
+        return jsonify({"error": "a reset is already in progress"}), 409
+    try:
+        # Build the fresh draft OUTSIDE the main lock so other people's polling
+        # keeps working during the few seconds it takes, then swap it in.
+        new_tracker, new_weekly = _build_draft()
+        with _lock:
+            n_picks = TRACKER.overall - 1
+            TRACKER, WEEKLY = new_tracker, new_weekly
+            HISTORY.clear()
+            EPOCH += 1
+            _append_history(user, "reset",
+                            f"Draft reset by {user}. All {n_picks} pick(s) and the log were erased.",
+                            {"kind": "reset", "picks_erased": n_picks})
+            state = _state_snapshot()
+    except Exception as e:
+        return jsonify({"error": f"reset failed: {e}"}), 500
+    finally:
+        _reset_lock.release()
+    return jsonify({"ok": True, "state": state})
 
 
 if __name__ == "__main__":
