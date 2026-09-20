@@ -36,6 +36,11 @@ app = Flask(__name__)
 _lock = threading.Lock()
 _reset_lock = threading.Lock()  # only one reset/rebuild at a time
 
+# When it's an alliance team's turn (my_slot + allies), automatically run the
+# top-3 recommendation and post it to the shared log. Set AUTO_TOP3=0 on Render
+# (Environment tab) to turn it off without touching code.
+AUTO_TOP3 = os.environ.get("AUTO_TOP3", "1").strip().lower() not in ("0", "false", "no", "off")
+
 # How many players are draftable, best ADP/rank first. Override with the
 # POOL_SIZE environment variable (e.g. on Render) without touching code.
 POOL_SIZE = int(os.environ.get("POOL_SIZE", engine.DEFAULT_POOL_SIZE))
@@ -97,6 +102,46 @@ def _state_snapshot():
     }
 
 
+def _clock_key():
+    """(overall pick number, team on the clock) -- changes whenever the turn moves."""
+    if TRACKER.overall > len(TRACKER.pick_order):
+        return (TRACKER.overall, None)
+    return (TRACKER.overall, TRACKER.pick_order[TRACKER.overall - 1])
+
+
+def _auto_top3_worker(tracker, overall, team, epoch):
+    """Runs in a background thread so the pick that triggered it returns instantly.
+    Re-checks under the lock that the draft hasn't moved on (or been reset) while
+    waiting; if it has, the recommendation would be stale, so it quietly drops it."""
+    with _lock:
+        if TRACKER is not tracker or EPOCH != epoch or _clock_key() != (overall, team):
+            return
+        TRACKER.last_report = None
+        try:
+            output = engine.dispatch_command(TRACKER, f"top3 {team}", WEEKLY)
+        except Exception as e:
+            output = f"[!] Auto top-3 failed: {e}"
+        data = getattr(TRACKER, "last_report", None)
+        TRACKER.last_report = None
+        _append_history("auto", f"top3 (auto, pick #{overall}, Team {team})", output, data)
+
+
+def _maybe_auto_top3(before_key):
+    """Call while holding _lock, after a command. If the turn moved to an alliance
+    team, kick off the top-3 in the background."""
+    if not AUTO_TOP3:
+        return
+    after_key = _clock_key()
+    overall, team = after_key
+    if after_key == before_key or team is None:
+        return
+    alliance = set(TRACKER.alliance_allies or ()) | {TRACKER.my_slot}
+    if team not in alliance:
+        return
+    threading.Thread(target=_auto_top3_worker, args=(TRACKER, overall, team, EPOCH),
+                     daemon=True).start()
+
+
 @app.route("/")
 def index():
     return send_from_directory(BASE_DIR, "index.html")
@@ -132,6 +177,7 @@ def api_command():
     if not text:
         return jsonify({"error": "empty command"}), 400
     with _lock:
+        before_key = _clock_key()
         TRACKER.last_report = None  # so a stale table never rides along with a different command
         try:
             output = engine.dispatch_command(TRACKER, text, WEEKLY)
@@ -140,6 +186,7 @@ def api_command():
         data = getattr(TRACKER, "last_report", None)
         TRACKER.last_report = None
         _append_history(user, text, output, data)
+        _maybe_auto_top3(before_key)
         state = _state_snapshot()
     return jsonify({"output": output, "data": data, "state": state})
 

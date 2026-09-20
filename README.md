@@ -75,6 +75,15 @@ ranking in `recommend_top3()` are unchanged. `print_top3_table()` also stores a
 structured copy on `tracker.last_report`, which `app.py` sends to the page as
 `data` alongside the plain-text `output`.
 
+## Auto Top 3 on alliance turns
+Whenever the clock lands on an alliance team (your slot + allies, i.e. teams 9, 6, 7), the server
+automatically runs `top3` for that team and posts the table to the shared log as a
+`top3 (auto, pick #N, Team X)` entry from user `auto`. It runs in the background so the pick that
+triggered it returns instantly; the table appears on everyone's screen within a few seconds via the
+normal polling. It also fires after `undo` or `snake`/`3rr` if that moves an alliance team onto the
+clock, and drops itself if the draft moves on before it finishes. Turn it off by setting the
+`AUTO_TOP3=0` environment variable on Render.
+
 ## Cat rank, H2H standings and playoff bracket views
 `catrank`, `h2hstand` and `playoffbracket` get the same treatment: an aligned
 text report on the CLI, and real HTML on the web page (a color-scaled category
