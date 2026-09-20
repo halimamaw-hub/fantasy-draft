@@ -25,9 +25,9 @@ warnings.filterwarnings("ignore")  # pandas perf-warnings from engine.py, not er
 import engine
 
 BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / "data"
+DATA_DIR = BASE_DIR  # CSVs sit next to app.py in the repo, not in a data/ subfolder
 
-app = Flask(__name__, static_folder="static", static_url_path="")
+app = Flask(__name__)
 
 # ---------------------------------------------------------------------
 # One shared draft, one lock. Three people hitting the same tracker at
@@ -77,7 +77,7 @@ def _state_snapshot():
 
 @app.route("/")
 def index():
-    return send_from_directory("static", "index.html")
+    return send_from_directory(BASE_DIR, "index.html")
 
 
 @app.route("/api/state")
