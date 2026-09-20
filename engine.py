@@ -2255,16 +2255,25 @@ V15_VERSION = "30.0-consolidated-dual-target"
 V15_LIVE_MIN = 24
 V15_LIVE_MAX = 144
 V15_LIVE_BATCH = 12
-# v33: wall-clock budget for a single top3/recommend_top3 call, in seconds.
+# v33: wall-clock budget for the WHOLE top3/recommend_top3 call, in seconds
+# -- both the candidate-scoring stage and the live-MC stage below are kept
+# inside this, split by _V15_BATCH_TIME_FRACTION. (Earlier versions only
+# time-boxed the MC stage; the candidate-scoring stage ran uncapped, which
+# is what let a slow/throttled CPU blow past this budget entirely -- see
+# v15_batch_top3's deadline argument.)
 # On a fast machine this changes nothing -- if the full trial ceilings above
 # finish under budget, results are identical to before. On a slow machine it
-# throttles trial counts (never accuracy targets) so a live on-the-clock
-# recommendation always lands in this window instead of running 10+ seconds.
+# throttles trial/candidate counts (never accuracy targets) so a live
+# on-the-clock recommendation always lands in this window instead of running
+# far longer than intended.
 TOP3_TIME_BUDGET_SEC = 4.0
+# Candidate scoring (BPA + portfolio fit for up to 8 shortlisted players)
+# gets this fraction of the budget; live MC gets the rest.
+_V15_BATCH_TIME_FRACTION = 0.5
 # Always complete at least this many MC rollouts per candidate before a
 # deadline is allowed to cut a candidate off, so a very tight budget degrades
 # to "fewer trials" rather than "no signal at all" for any one candidate.
-_V15_MC_MIN_TRIAL_FLOOR = 8
+_V15_MC_MIN_TRIAL_FLOOR = 4
 V15_DEFAULT_WEIGHTS = {
     "sweep": 0.34,
     "two_plus_top3": 0.10,
@@ -2550,7 +2559,7 @@ def _v15_simulation_batch_top3(tracker, team):
         rows.append(r)
     return pd.DataFrame(rows).sort_values(['v13_final_score','pre_mc_score'],ascending=False).reset_index(drop=True).head(3)
 
-def v15_batch_top3(tracker, team):
+def v15_batch_top3(tracker, team, deadline=None):
     if getattr(tracker, '_simulation_mode', False):
         return _v15_simulation_batch_top3(tracker, team)
     taken=set(tracker._drafted_to_team)
@@ -2564,7 +2573,12 @@ def v15_batch_top3(tracker, team):
     projected,_=v12_project_remaining_rosters(tracker,seed=tracker.overall+team+15)
     baseline=_v15_portfolio_metrics(tracker,projected,late_round=tracker.current_round>=V13_LATE_ROUNDS,include_lookahead=False)
     rows=[]
-    for cand in shortlist:
+    for i,cand in enumerate(shortlist):
+        # Once the top 3 (by pure pre-MC value) are scored, later candidates
+        # in the shortlist are marginal portfolio-fit rescues -- fine to skip
+        # under time pressure rather than let a slow CPU blow the deadline.
+        if deadline is not None and i >= 3 and time.monotonic() >= deadline:
+            break
         trial={t:list(r) for t,r in projected.items()}
         trial=_trial_rosters_with_candidate(tracker,team,cand,tracker.rosters[team],trial)
         m=_v15_portfolio_metrics(tracker,trial,late_round=tracker.current_round>=V13_LATE_ROUNDS,include_lookahead=False)
@@ -2673,16 +2687,19 @@ def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None):
     return results
 
 def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=0, **kwargs):
-    # v33: the whole call (deterministic portfolio scoring + live MC) is kept
-    # inside TOP3_TIME_BUDGET_SEC (~3-5s) -- the deadline is set here, before
-    # v15_batch_top3 runs, so time that step takes also counts against the
-    # budget the MC pass below gets to work with.
+    # v33/v34: the WHOLE call (candidate scoring + live MC) is kept inside
+    # TOP3_TIME_BUDGET_SEC -- see the constant's comment above for why the
+    # deadline now starts here, before v15_batch_top3 runs, instead of after.
     _start_ts=time.monotonic()
     team=tracker.my_slot if team is None else team
-    candidate=v15_batch_top3(tracker,team)
+    _batch_deadline=_start_ts + TOP3_TIME_BUDGET_SEC*_V15_BATCH_TIME_FRACTION
+    candidate=v15_batch_top3(tracker,team,deadline=_batch_deadline)
+    _batch_elapsed=time.monotonic()-_start_ts
     if candidate.empty: return candidate, f'{team_label(team)} -- no players available.'
     _deadline=_start_ts + TOP3_TIME_BUDGET_SEC
     mc=_v15_adaptive_mc(tracker,team,candidate,seed=seed or tracker.overall,deadline=_deadline) if live_mc else {}
+    _total_elapsed=time.monotonic()-_start_ts
+    print(f"[timing] candidate scoring: {_batch_elapsed:.2f}s | live MC: {_total_elapsed-_batch_elapsed:.2f}s | total: {_total_elapsed:.2f}s")
     for p,m in mc.items():
         for k,v in m.items(): candidate.loc[candidate.Player==p,k]=v
     for col in ('mc_sweep_prob','mc_season_sweep_prob','mc_team_champ_prob','mc_alliance_top3_share'):
