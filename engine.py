@@ -22,13 +22,16 @@ removed (see the CHANGES report delivered alongside this file) -- the only
 lookahead that scores candidates for ONE top-3 recommendation, which is not
 optional infrastructure, it's how recommend_top3() itself works.
 
-Up to four projection sources are blended (any subset is fine):
+Up to five projection sources are blended (any subset is fine):
   * fantasy_basketball_rankings.csv  (proj1)
   * table.csv                        (proj2, ';'-separated, has minutes)
   * ESPN_Fantasy_Basketball_Projections_Complete.csv (proj3 -- now includes
     GP and TO; either is still tolerated as missing, see
     _load_projection_csv's docstring)
   * rotoballerfantasyranking.csv     (proj4 -- no GP column, tolerated)
+  * yahoo_predictions_top400_per_game.csv (proj5 -- per-game Yahoo predictions;
+    players are listed as "V. Wembanyama", so they are matched to the pool by
+    first initial + last name + team/stats -- see _match_abbreviated_names)
 
 No PDFs are needed anywhere -- attach_consensus_rankings() uses Fantrax ADP
 alone by default (optionally blended with one more plain CSV, extra_rank_csv=).
@@ -94,11 +97,12 @@ _SOURCE_PREFIX_MAP = {
     "proj2": "table_",  # table.csv
     "proj3": "espn_",   # ESPN_Fantasy_Basketball_Projections_Complete.csv
     "proj4": "roto_",   # rotoballerfantasyranking.csv
+    "proj5": "yahoo_",  # yahoo_predictions_top400_per_game.csv
 }
 _SOURCE_PREFIX_ALIASES = {"fantrax_": "r_"}
 
 def _resolve_named_source_prefix(pool, label):
-    """label: 'espn', 'roto', 'rank', 'table', or 'fantrax' (case-insensitive,
+    """label: 'espn', 'roto', 'rank', 'table', 'yahoo', or 'fantrax' (case-insensitive,
     trailing underscore optional). Returns the matching rcol_prefix, or
     raises a clear error naming which proj*_path was never supplied if that
     source's columns aren't on the pool (merge_projections only writes a
@@ -163,6 +167,7 @@ NAME_ALIASES = {
     "gg jackson": "gregory jackson",
     "kj martin": "kenyon martin jr",
     "ron holland": "ronald holland",
+    "b carrington": "carlton carrington",   # Yahoo abbreviates him by his nickname
 }
 
 def playoff_weeks_from_schedule(weekly_games_df, n_weeks=4):
@@ -338,10 +343,124 @@ def _normalize_pct_scale(df, cols=("FG%", "FT%"), label=""):
                   f"(median {med:.1f}) -- rescaled to a 0-1 fraction.")
     return df
 
+# Standard NBA abbreviations (Yahoo, ESPN, ...) -> the codes the Fantrax base
+# export uses in pool["Team"].
+_TEAM_CODE_TO_POOL = {"GSW": "GS", "NOR": "NO", "NOP": "NO", "NYK": "NY", "SAS": "SA", "PHX": "PHO"}
+# Matching guards for _match_abbreviated_names (see there).
+_ABBREV_TEAM_MISMATCH_COST = 1.0   # soft: players change teams between exports
+_ABBREV_STAT_REJECT = 12.0         # summed |stat diff| / league std; above this AND a team mismatch = not the same player
+_ABBREV_STATS = ["PTS", "REB", "AST", "3PTM", "ST", "BLK"]
+
+
+def _pool_team_code(code):
+    c = str(code if code is not None else "").strip().upper()
+    if c in ("", "NAN", "(N/A)", "N/A", "-", "--"):
+        return ""
+    return _TEAM_CODE_TO_POOL.get(c, c)
+
+
+def _match_abbreviated_names(df, pool, label=""):
+    """Map a projection file's abbreviated names ("V. Wembanyama", "T. da
+    Silva", "J. Smith Jr.") to the pool's normalized full names.
+
+    Order of attack for each row:
+      1. exact normalized-name match (covers full names and NAME_ALIASES);
+      2. same first initial + same last name as exactly one pool player;
+      3. when several rows and/or pool players share initial+last name
+         (D. Mitchell, A. Thompson, J. Green ...): assigned one-to-one by
+         lowest cost, where cost = team mismatch penalty + how far the
+         player's per-game line is from the pool player's last-season line.
+    A match is rejected when the team differs AND the stat lines are far
+    apart, so a same-name player who isn't in the pool isn't glued to a
+    stranger. Returns a list of norm keys aligned with df's rows: the pool's
+    norm for a match, or a unique throwaway key for an unmatched row (so
+    unmatched rows never collide in the duplicate drop).
+    """
+    from scipy.optimize import linear_sum_assignment
+    pool_norm = pool["norm"].tolist()
+    exact = {n: i for i, n in enumerate(pool_norm)}
+    by_key = {}
+    for i, n in enumerate(pool_norm):
+        t = n.split()
+        if t:
+            by_key.setdefault((t[0][0], t[-1]), []).append(i)
+
+    scale = {c: float(pd.to_numeric(pool[c], errors="coerce").std() or 1.0) or 1.0
+             for c in _ABBREV_STATS if c in pool.columns}
+    pool_team = [_pool_team_code(t) for t in (pool["Team"] if "Team" in pool.columns else [""] * len(pool))]
+
+    def stat_dist(row, i):
+        d, used = 0.0, 0
+        for c, sc in scale.items():
+            a, b = row.get(c), pool.iloc[i][c]
+            if pd.notna(a) and pd.notna(b):
+                d += abs(float(a) - float(b)) / sc
+                used += 1
+        prior_zero = float(pd.to_numeric(pool.iloc[i][[c for c in _ABBREV_STATS if c in pool.columns]],
+                                         errors="coerce").abs().sum()) == 0.0
+        return 0.0 if (used == 0 or prior_zero) else d
+
+    def team_bad(row, i):
+        a, b = _pool_team_code(row.get("Team")), pool_team[i]
+        return bool(a and b and a != b)
+
+    result = [None] * len(df)
+    taken = set()
+    groups = {}
+    for pos in range(len(df)):
+        n = df["norm"].iat[pos]
+        if n in exact:
+            result[pos] = n
+            taken.add(exact[n])
+            continue
+        t = str(n).split()
+        if t:
+            groups.setdefault((t[0][0], t[-1]), []).append(pos)
+
+    resolved_by_cost, rejected = [], []
+    for key, rows in groups.items():
+        cands = [i for i in by_key.get(key, []) if i not in taken]
+        if not cands:
+            continue
+        cost = np.zeros((len(rows), len(cands)))
+        for a, pos in enumerate(rows):
+            row = df.iloc[pos]
+            for b, i in enumerate(cands):
+                cost[a, b] = stat_dist(row, i) * 0.1 + (_ABBREV_TEAM_MISMATCH_COST if team_bad(row, i) else 0.0)
+        ri, ci = linear_sum_assignment(cost)
+        ambiguous = len(rows) > 1 or len(cands) > 1
+        for a, b in zip(ri, ci):
+            pos, i = rows[a], cands[b]
+            row = df.iloc[pos]
+            if team_bad(row, i) and stat_dist(row, i) > _ABBREV_STAT_REJECT:
+                rejected.append((df["Player"].iat[pos], pool["Player"].iloc[i]))
+                continue
+            result[pos] = pool_norm[i]
+            taken.add(i)
+            if ambiguous:
+                resolved_by_cost.append((df["Player"].iat[pos], str(row.get("Team", "")), pool["Player"].iloc[i]))
+
+    n_matched = sum(r is not None for r in result)
+    print(f"[merge_projections] {label}: matched {n_matched}/{len(df)} abbreviated names to the pool "
+          f"({len(resolved_by_cost)} shared-name cases resolved by team/stats"
+          + (f"; {len(rejected)} rejected as a different player" if rejected else "") + ")")
+    if resolved_by_cost:
+        print("[merge_projections]   shared-name matches: "
+              + "; ".join(f"{y} ({t}) -> {p}" for y, t, p in resolved_by_cost[:12])
+              + (" ..." if len(resolved_by_cost) > 12 else ""))
+    if rejected:
+        print("[merge_projections]   rejected: " + "; ".join(f"{y} != {p}" for y, p in rejected[:8]))
+    return [r if r is not None else f"{df['norm'].iat[pos]}#unmatched{pos}" for pos, r in enumerate(result)]
+
+
 def _load_projection_csv(csv_path, name_col, team_col, gp_col, pts_col, tpm_col,
                           reb_col, ast_col, stl_col, blk_col, to_col, fg_col, ft_col,
                           fga_col=None, fta_col=None, minutes_col=None, contract_col=None,
-                          sep=","):
+                          sep=",", abbrev_pool=None):
+    """abbrev_pool: pass the pool for sources that list players by first initial
+    ("V. Wembanyama"); their names are resolved to the pool's full names
+    BEFORE the duplicate drop below (two different "A. Thompson" rows must both
+    survive to be told apart). Leave None for full-name sources."""
     df = pd.read_csv(csv_path, sep=sep)
     rename = {name_col: "Player", team_col: "Team"}
     # Any stat column can be omitted (this source just doesn't report it --
@@ -383,6 +502,9 @@ def _load_projection_csv(csv_path, name_col, team_col, gp_col, pts_col, tpm_col,
         df["has_attempts"] = False
 
     df["norm"] = df["Player"].map(_norm_name)
+    if abbrev_pool is not None:
+        df = df.dropna(subset=["PTS"]).reset_index(drop=True)
+        df["norm"] = _match_abbreviated_names(df, abbrev_pool, label=csv_path.split("/")[-1])
     df = df.dropna(subset=["PTS", "norm"])
     df = df.sort_values("GP", ascending=False).drop_duplicates("norm")
 
@@ -390,8 +512,9 @@ def _load_projection_csv(csv_path, name_col, team_col, gp_col, pts_col, tpm_col,
     if contract_col: keep.append("Contract")
     return df[[c for c in keep if c in df.columns]].reset_index(drop=True)
 
-def merge_projections(pool, proj1_path=None, proj2_path=None, proj3_path=None, proj4_path=None):
-    """Blend up to four external projection sources into the pool.
+def merge_projections(pool, proj1_path=None, proj2_path=None, proj3_path=None, proj4_path=None,
+                      proj5_path=None):
+    """Blend up to five external projection sources into the pool.
 
     proj1_path: fantasy_basketball_rankings.csv-style export (Player, GP, ...)
     proj2_path: table.csv-style export (Player Name, Games Played, ...; ';'-sep)
@@ -403,9 +526,14 @@ def merge_projections(pool, proj1_path=None, proj2_path=None, proj3_path=None, p
     proj4_path: RotoBaller-style export (Player, FG/FGA/FGpct, FT/FTA/FTpct,
                 FG3, RB, AST, BLK, STL, TO, Min, ...). No GP column -- handled
                 the same way proj3 used to be (see _load_projection_csv).
+    proj5_path: Yahoo predictions export (XRank, Rank, Player, Pos, Team, Status,
+                ADP, GP, FG%, FT%, 3PM, PTS, REB, AST, STL, BLK, TO; per game).
+                Names are abbreviated ("V. Wembanyama") and are matched to the
+                pool by _match_abbreviated_names. No minutes/attempt columns:
+                FGA/FTA are estimated the same way proj1's are.
 
     Any subset may be supplied. zproj_/rproj_ are the mean across whichever
-    projection sources were given (1-4); zens_/rens_ additionally fold
+    projection sources were given (1-5); zens_/rens_ additionally fold
     in last season's actuals (z_/r_). A category a given source doesn't
     report is skipped for that source via skipna=True rather than pulling
     the ensemble toward zero.
@@ -455,6 +583,14 @@ def merge_projections(pool, proj1_path=None, proj2_path=None, proj3_path=None, p
             pts_col="PTS", tpm_col="FG3", reb_col="RB", ast_col="AST",
             stl_col="STL", blk_col="BLK", to_col="TO", fg_col="FGpct", ft_col="FTpct",
             fga_col="FGA", fta_col="FTA", minutes_col="Min",
+        ),
+        "proj5": dict(
+            # Yahoo per-game predictions. Player names are "F. Lastname", so
+            # abbrev_pool makes the loader resolve them against the pool.
+            path=proj5_path, name_col="Player", team_col="Team", gp_col="GP",
+            pts_col="PTS", tpm_col="3PM", reb_col="REB", ast_col="AST",
+            stl_col="STL", blk_col="BLK", to_col="TO", fg_col="FG%", ft_col="FT%",
+            abbrev_pool=pool,
         ),
     }
 
@@ -3149,6 +3285,7 @@ _SOURCE_INFO = {
     "rank":    ("Rankings file",          "fantasy_basketball_rankings.csv"),
     "table":   ("table.csv projections",  "table.csv"),
     "fantrax": ("Fantrax export",         "Fantrax-Players-2K27GMLeague.csv"),
+    "yahoo":   ("Yahoo projections",      "yahoo_predictions_top400_per_game.csv"),
 }
 
 
@@ -3344,6 +3481,11 @@ _SOURCE_COMMANDS = {
     "tableh2h":            ("h2hstand",       "table"),
     "tableplayoffbracket": ("playoffbracket", "table"),
     "tablebracket":        ("playoffbracket", "table"),
+    "yahoocatrank":        ("catrank",        "yahoo"),
+    "yahooh2hstand":       ("h2hstand",       "yahoo"),
+    "yahooh2h":            ("h2hstand",       "yahoo"),
+    "yahooplayoffbracket": ("playoffbracket", "yahoo"),
+    "yahoobracket":        ("playoffbracket", "yahoo"),
     "fantraxcatrank":        ("catrank",        "fantrax"),
     "fantraxh2hstand":       ("h2hstand",       "fantrax"),
     "fantraxh2h":            ("h2hstand",       "fantrax"),
@@ -3609,7 +3751,7 @@ _LOOP_HELP = """Commands:
   <source>h2hstand            H2H standings + alliance losses on ONE projection file
   <source>bracket             playoff bracket on ONE projection file
       <source> = espn (ESPN csv) | roto (RotoBaller csv) | rank (fantasy_basketball_rankings.csv)
-                 | table (table.csv) | fantrax (base Fantrax export)
+                 | table (table.csv) | yahoo (Yahoo predictions csv) | fantrax (base Fantrax export)
       e.g. espncatrank, rotoh2hstand, tablebracket  (h2h and playoffbracket also work as espnh2h / espnplayoffbracket)
   playoffbracket              provisional playoff bracket from projected standings
   endofseason                 predicted champion/runner-up/3rd + alliance goal status
@@ -3717,6 +3859,7 @@ def build_tracker(data_dir=".", my_slot=9, teams=10, rounds=14, reversal_round=3
     PROJ2_PATH = data_dir / "table.csv"
     PROJ3_PATH = data_dir / "ESPN_Fantasy_Basketball_Projections_Complete.csv"
     PROJ4_PATH = data_dir / "rotoballerfantasyranking.csv"
+    PROJ5_PATH = data_dir / "yahoo_predictions_top400_per_game.csv"
     SCHEDULE = data_dir / "NBASchedule-Sheet1.csv"
 
     pool = load_players(str(CSV_PATH), pool_size=pool_size)
@@ -3726,6 +3869,7 @@ def build_tracker(data_dir=".", my_slot=9, teams=10, rounds=14, reversal_round=3
         proj2_path=str(PROJ2_PATH) if PROJ2_PATH.exists() else None,
         proj3_path=str(PROJ3_PATH) if PROJ3_PATH.exists() else None,
         proj4_path=str(PROJ4_PATH) if PROJ4_PATH.exists() else None,
+        proj5_path=str(PROJ5_PATH) if PROJ5_PATH.exists() else None,
     )
     pool = apply_minutes_confidence(pool)
     pool = attach_consensus_rankings(pool)

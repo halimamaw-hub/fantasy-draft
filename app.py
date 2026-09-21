@@ -146,7 +146,7 @@ def _state_snapshot():
 # every 3-second poll from every browser tab: unchanged state is a cache hit.
 # ---------------------------------------------------------------------
 REPORT_KINDS = {"catrank", "h2hstand", "playoffbracket"}
-REPORT_SOURCES = {"", "espn", "roto", "rank", "table", "fantrax"}
+REPORT_SOURCES = {"", "espn", "roto", "rank", "table", "yahoo", "fantrax"}
 REPORT_CACHE = {}
 
 
@@ -328,7 +328,7 @@ def api_report():
     """Live catrank / h2hstand / playoffbracket for the Standings tab. Doesn't
     touch the shared HISTORY log -- this is per-viewer, polled independently
     of the draft pick log. ?kind=catrank|h2hstand|playoffbracket
-    &source=(blank for blended)|espn|roto|rank|table|fantrax"""
+    &source=(blank for blended)|espn|roto|rank|table|yahoo|fantrax"""
     kind = request.args.get("kind", "catrank").strip().lower()
     source = request.args.get("source", "").strip().lower()
     if kind not in REPORT_KINDS or source not in REPORT_SOURCES:
