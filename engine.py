@@ -2096,8 +2096,14 @@ def v12_fast_candidate_mc(tracker, team, candidate, min_trials=24, max_trials=96
         "mc_ci_high": min(1.0, p + 1.96 * math.sqrt(max(p * (1 - p), 1e-9) / max(trials, 1))),
     }
 
-def _v12_candidate_base_table(tracker, team):
-    """Generate a compact candidate table before MC. This is intentionally cheap."""
+def _v12_candidate_base_table(tracker, team, only_players=None):
+    """Generate a compact candidate table before MC. This is intentionally cheap.
+
+    only_players: optional list of player names. When given, the table holds
+    exactly those (still-available) players -- same value/swing/availability
+    columns and the same pre_mc_score formula -- instead of the usual
+    shortlist of the ~8 best candidates. Used by the `check` command.
+    """
     round_num = tracker.current_round
     max_punts = max_punts_for_round(round_num, 2)
     roster = list(tracker.rosters[team])
@@ -2120,6 +2126,19 @@ def _v12_candidate_base_table(tracker, team):
         pick_return_probability(float(a), next_pick, 7.0) for a in pd.to_numeric(avail["ADP"], errors="coerce")
     ]
     avail["sniped_before_next_pick_pct"] = 100.0 * (1.0 - avail["return_prob_next_pick"])
+
+    if only_players is not None:
+        base = avail[avail["Player"].isin(list(only_players))].copy()
+        if base.empty:
+            return pd.DataFrame(), []
+        base["was_milp_pick"] = False
+        alpha = min(1.0, max(0.0, (round_num - 1) / 5.0))
+        base["pre_mc_score"] = ((1 - alpha) * base["value_z"] + 0.30 * base["swing_alignment"]
+                                 + alpha * base["consensus_value"] / 10.0
+                                 + 0.25 * (1.0 - base["return_prob_next_pick"]))
+        order = {p: i for i, p in enumerate(only_players)}
+        base = base.assign(_ord=base["Player"].map(order)).sort_values("_ord").drop(columns="_ord")
+        return base.reset_index(drop=True), []
 
     # Candidate pool: consensus top, Fantrax ADP top, z-value top, and MILP.
     top_cons = avail.sort_values("Consensus_Rank").head(8) if "Consensus_Rank" in avail else avail.sort_values("ADP").head(8)
@@ -2207,7 +2226,7 @@ def _t3_signed(x):
     return "--" if x is None else f"{x:+.2f}"
 
 
-def _t3_build_payload(top3, punt_note, tracker=None, team=None):
+def _t3_build_payload(top3, punt_note, tracker=None, team=None, custom=False):
     """Turn recommend_top3()'s DataFrame into a plain-dict payload."""
     next_pick = None
     overall = rnd = None
@@ -2255,7 +2274,9 @@ def _t3_build_payload(top3, punt_note, tracker=None, team=None):
         })
 
     return {
-        "kind": "top3",
+        "kind": "top3check" if custom else "top3",
+        "custom": bool(custom),
+        "budget_sec": getattr(tracker, "_last_top3_budget", None) if tracker is not None else None,
         "team": None if team is None else int(team),
         "team_label": team_label(team) if team is not None else "",
         "overall": overall,
@@ -2284,7 +2305,7 @@ def _t3_render_text(p, width=100):
     rows = p["rows"]
     bar = "=" * width
     thin = "-" * width
-    out = [bar, f"TOP 3 PICKS  |  {p['team_label']}"]
+    out = [bar, f"{'PLAYER CHECK' if p.get('custom') else 'TOP 3 PICKS'}  |  {p['team_label']}"]
     sub = []
     if p["overall"] is not None:
         sub.append(f"Pick #{p['overall']}" + (f" (round {p['round']})" if p["round"] else ""))
@@ -2317,7 +2338,7 @@ def _t3_render_text(p, width=100):
     out.append("  ".join("-" * w for w in widths))
     out.extend(fmt(b) for b in body)
 
-    out += ["", "WHY EACH PICK", thin]
+    out += ["", "DETAIL FOR EACH PLAYER" if p.get("custom") else "WHY EACH PICK", thin]
     for r in rows:
         title = f"#{r['rank']} {r['player']}" + (f" ({r['position']})" if r["position"] else "")
         out.append(title)
@@ -2367,6 +2388,8 @@ def _t3_render_text(p, width=100):
             f"Some rows used fewer than {p['min_sims']} simulations (the live time limit was hit), "
             f"so treat their percentages as rough.", width=width, initial_indent=f"  {'Note':<15}",
             subsequent_indent=" " * 17))
+    if p.get("budget_sec"):
+        out.append(f"  {'Time budget':<15}{p['budget_sec']:.0f}s of simulation time for this call")
     if p["note"]:
         out += ["", "ABOUT THIS RECOMMENDATION", thin,
                 _textwrap.fill(p["note"], width=width)]
@@ -2374,13 +2397,13 @@ def _t3_render_text(p, width=100):
     return "\n".join(out)
 
 
-def print_top3_table(top3, punt_note, tracker=None, team=None):
+def print_top3_table(top3, punt_note, tracker=None, team=None, custom=False):
     """Print the top-3 recommendation as a readable report.
 
     Also stores a structured copy on `tracker.last_report` so the web page can
     draw a real HTML table. Scoring/ranking logic is untouched.
     """
-    payload = _t3_build_payload(top3, punt_note, tracker=tracker, team=team)
+    payload = _t3_build_payload(top3, punt_note, tracker=tracker, team=team, custom=custom)
     text = _t3_render_text(payload)
     payload["text"] = text
     if tracker is not None:
@@ -2487,6 +2510,17 @@ V15_LIVE_BATCH = 12
 # on-the-clock recommendation always lands in this window instead of running
 # far longer than intended.
 TOP3_TIME_BUDGET_SEC = 4.0
+# "Long" mode (toggled from the web page / `long on|off`): the wall-clock
+# budget used for every top-3 and player check while it is on. Benchmarked at
+# ~0.044 s per rollout on one core: 4 s only fits ~20 trials per candidate
+# (under the 24-trial minimum); ~10 s reaches the minimum with headroom and
+# most of the accuracy gain, and past ~15-20 s the trial ceilings
+# (V15_LIVE_MAX) mean extra time buys nothing. Override with the
+# LONG_TOP3_SECONDS environment variable (read in app.py).
+LONG_TOP3_TIME_BUDGET_SEC = 10.0
+# Most players `check` will evaluate at once; the time budget is scaled up
+# proportionally beyond 3 so each one still gets a full share of it.
+CHECK_MAX_PLAYERS = 5
 # Candidate scoring (BPA + portfolio fit for up to 8 shortlisted players)
 # gets this fraction of the budget; live MC gets the rest.
 _V15_BATCH_TIME_FRACTION = 0.5
@@ -2780,17 +2814,23 @@ def _v15_simulation_batch_top3(tracker, team):
         rows.append(r)
     return pd.DataFrame(rows).sort_values(['v13_final_score','pre_mc_score'],ascending=False).reset_index(drop=True).head(3)
 
-def v15_batch_top3(tracker, team, deadline=None):
-    if getattr(tracker, '_simulation_mode', False):
+def v15_batch_top3(tracker, team, deadline=None, players=None):
+    """players: optional list of names to score instead of the auto shortlist
+    (the `check` command). Every listed player is scored -- the deadline never
+    skips one -- and all of them are returned, not just three."""
+    if players is None and getattr(tracker, '_simulation_mode', False):
         return _v15_simulation_batch_top3(tracker, team)
     taken=set(tracker._drafted_to_team)
     avail=tracker.pool[~tracker.pool['Player'].isin(taken)].copy()
     if avail.empty: return avail
-    base,_=_v12_candidate_base_table(tracker,team)
+    base,_=_v12_candidate_base_table(tracker,team,only_players=players)
     if base.empty: return base
     # Keep a broader shortlist so late scarcity and portfolio effects can rescue
     # players that are just outside the pure BPA top tier.
-    shortlist=base.sort_values('pre_mc_score',ascending=False).head(8)['Player'].tolist()
+    if players is not None:
+        shortlist=base['Player'].tolist()
+    else:
+        shortlist=base.sort_values('pre_mc_score',ascending=False).head(8)['Player'].tolist()
     projected,_=v12_project_remaining_rosters(tracker,seed=tracker.overall+team+15)
     baseline=_v15_portfolio_metrics(tracker,projected,late_round=tracker.current_round>=V13_LATE_ROUNDS,include_lookahead=False)
     rows=[]
@@ -2798,7 +2838,7 @@ def v15_batch_top3(tracker, team, deadline=None):
         # Once the top 3 (by pure pre-MC value) are scored, later candidates
         # in the shortlist are marginal portfolio-fit rescues -- fine to skip
         # under time pressure rather than let a slow CPU blow the deadline.
-        if deadline is not None and i >= 3 and time.monotonic() >= deadline:
+        if players is None and deadline is not None and i >= 3 and time.monotonic() >= deadline:
             break
         trial={t:list(r) for t,r in projected.items()}
         trial=_trial_rosters_with_candidate(tracker,team,cand,tracker.rosters[team],trial)
@@ -2834,9 +2874,9 @@ def v15_batch_top3(tracker, team, deadline=None):
             r['v13_final_score']=pw*score+vw*r.get('pre_mc_score',0)
         rows.append(r)
     out=pd.DataFrame(rows)
-    return out.sort_values(['v13_final_score','pre_mc_score'],ascending=False).reset_index(drop=True).head(3)
+    return out.sort_values(['v13_final_score','pre_mc_score'],ascending=False).reset_index(drop=True).head(len(shortlist) if players is not None else 3)
 
-def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None):
+def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None, budget=None, max_names=3):
     """Fast sequential MC with separate podium and sweep targets.
 
     podium_2plus_prob = probability that >=2 alliance teams occupy the 3
@@ -2850,8 +2890,8 @@ def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None):
     starve the others -- each just gets fewer trials if time is short.
     """
     if deadline is None:
-        deadline = time.monotonic() + TOP3_TIME_BUDGET_SEC
-    names=candidate_rows['Player'].tolist()[:3]
+        deadline = time.monotonic() + (budget or TOP3_TIME_BUDGET_SEC)
+    names=candidate_rows['Player'].tolist()[:max_names]
     results={}
     n_names=len(names)
     for j,p in enumerate(names):
@@ -2914,18 +2954,29 @@ def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None):
                     results[p]['mc_podium_2plus_prob']=float(np.clip((3.0*share-1.0)/2.0,0.0,1.0))
     return results
 
-def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=0, **kwargs):
+def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=0,
+                   players=None, time_budget=None, **kwargs):
+    """time_budget: wall-clock seconds for the whole call (default
+    TOP3_TIME_BUDGET_SEC; the web app passes the long-mode budget).
+    players: optional list of names to evaluate with this exact pipeline
+    instead of the auto shortlist (the `check` command) -- see cmd_check."""
+    budget=float(time_budget) if time_budget else TOP3_TIME_BUDGET_SEC
+    n_custom=len(players) if players else 0
+    if n_custom>3:
+        budget*=n_custom/3.0   # keep the per-player share of the budget constant
+    tracker._last_top3_budget=budget
     # v33/v34: the WHOLE call (candidate scoring + live MC) is kept inside
     # TOP3_TIME_BUDGET_SEC -- see the constant's comment above for why the
     # deadline now starts here, before v15_batch_top3 runs, instead of after.
     _start_ts=time.monotonic()
     team=tracker.my_slot if team is None else team
-    _batch_deadline=_start_ts + TOP3_TIME_BUDGET_SEC*_V15_BATCH_TIME_FRACTION
-    candidate=v15_batch_top3(tracker,team,deadline=_batch_deadline)
+    _batch_deadline=_start_ts + budget*_V15_BATCH_TIME_FRACTION
+    candidate=v15_batch_top3(tracker,team,deadline=_batch_deadline,players=(list(players) if players else None))
     _batch_elapsed=time.monotonic()-_start_ts
     if candidate.empty: return candidate, f'{team_label(team)} -- no players available.'
-    _deadline=_start_ts + TOP3_TIME_BUDGET_SEC
-    mc=_v15_adaptive_mc(tracker,team,candidate,seed=seed or tracker.overall,deadline=_deadline) if live_mc else {}
+    _deadline=_start_ts + budget
+    mc=_v15_adaptive_mc(tracker,team,candidate,seed=seed or tracker.overall,deadline=_deadline,
+                        max_names=(n_custom or 3)) if live_mc else {}
     _total_elapsed=time.monotonic()-_start_ts
     print(f"[timing] candidate scoring: {_batch_elapsed:.2f}s | live MC: {_total_elapsed-_batch_elapsed:.2f}s | total: {_total_elapsed:.2f}s")
     for p,m in mc.items():
@@ -2995,7 +3046,11 @@ def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=
           f"Supporting terms: top-3/bye seeding, balance, category floor, weak-link strength, playoff path, "
           f"position runs, anti-alliance disruption, and scarcity lookahead. "
           f"Next Team {team} pick #{nxt if nxt else 'none'}.")
-    return candidate.head(3),note
+    if n_custom:
+        note=(f"PLAYER CHECK for {team_label(team)}: the players you picked, run through the same scoring "
+              f"and live simulations as the top-3 recommendation (ranked among themselves, not against the "
+              f"full pool). ")+note
+    return candidate.head(n_custom or 3),note
 
 # ============================================================================
 # v31 DRAFT-DAY LOOP -- catrank / h2hstand / playoffbracket / endofseason /
@@ -3145,20 +3200,28 @@ def _fmt_cat_value(cat, v):
 # ------------------------------- catrank ----------------------------------
 def _catrank_payload(tracker, values_df, ranks_df, source):
     alliance = _alliance_set(tracker)
+    n_teams = len(values_df.index)
     teams = []
     for t in values_df.index:
         rk = {c: int(ranks_df.loc[t, c]) for c in CAT_COLS}
+        # Predicted points: 1st in a category = n_teams points (10 in a 10-team
+        # league) ... last = 1 point, summed over every category. Teams tied
+        # on a category share the better rank, so they get the same points.
+        pts = {c: n_teams + 1 - rk[c] for c in CAT_COLS}
         info = _team_info(t, alliance)
         info.update({
             "players": int(values_df.loc[t, "players_drafted"]),
             "values": {c: float(values_df.loc[t, c]) for c in CAT_COLS},
             "ranks": rk,
-            "avg_rank": float(sum(rk.values())) / len(rk),
+            "points": pts,
+            "total_points": int(sum(pts.values())),
+            "avg_rank": float(sum(rk.values())) / len(rk),  # kept for reference; no longer displayed
         })
         teams.append(info)
-    teams.sort(key=lambda x: (x["avg_rank"], x["team"]))
+    teams.sort(key=lambda x: (-x["total_points"], x["avg_rank"], x["team"]))
     return {"kind": "catrank", "source": source, "categories": list(CAT_COLS),
-            "lower_is_better": ["TO"], "n_teams": len(teams), "teams": teams}
+            "lower_is_better": ["TO"], "n_teams": n_teams, "max_points": n_teams,
+            "teams": teams}
 
 
 def _catrank_text(p, width=110):
@@ -3166,10 +3229,11 @@ def _catrank_text(p, width=110):
     out = ["=" * width, f"CATEGORY RANKINGS  |  {p['source']['name']}"
            + (f"  ({p['source']['file']})" if p["source"]["file"] else ""),
            "Season totals, weighted by each player's real games. Rank 1 = best in that category"
-           " (turnovers: fewer is better).", "* = alliance team.  Teams are listed best average rank first.",
+           " (turnovers: fewer is better).", "* = alliance team.  Pts = predicted points: 1st in a category = "
+           f"{p['max_points']} pts ... last = 1 pt, summed over every category.  Teams are listed by Pts, highest first.",
            "=" * width, "", "RANK IN EACH CATEGORY (1 = best)"]
-    rows = [[_tname(t), f"{t['avg_rank']:.1f}"] + [str(t["ranks"][c]) for c in cats] for t in p["teams"]]
-    out.append(_text_table(["Team", "Avg"] + cats, rows))
+    rows = [[_tname(t), str(t["total_points"])] + [str(t["ranks"][c]) for c in cats] for t in p["teams"]]
+    out.append(_text_table(["Team", "Pts"] + cats, rows))
     out += ["", "SEASON TOTALS"]
     rows = [[_tname(t)] + [_fmt_cat_value(c, t["values"][c]) for c in cats] for t in p["teams"]]
     out.append(_text_table(["Team"] + cats, rows))
@@ -3472,11 +3536,73 @@ def _v31_auto_recommend(self):
 DraftTracker._maybe_auto_recommend = _v31_auto_recommend
 
 
+def _resolve_check_players(tracker, names):
+    """Match typed names to still-available pool players. Exact (normalized)
+    match first, then a unique partial match ("Cam Thomas" or just "Cam
+    Thom"). Returns (players, problems); problems are human-readable."""
+    norm = {p: _norm_name(p) for p in tracker.pool["Player"].tolist()}
+    players, problems = [], []
+    for raw in names:
+        n = _norm_name(raw)
+        if not n:
+            continue
+        hits = [p for p, v in norm.items() if v == n] or [p for p, v in norm.items() if n in v]
+        if not hits:
+            problems.append(f"Couldn't match '{raw}' to a player in the pool -- check spelling.")
+        elif len(hits) > 1:
+            problems.append(f"'{raw}' matches several players ({', '.join(hits[:5])}) -- be more specific.")
+        else:
+            p = hits[0]
+            if p in tracker._drafted_to_team:
+                problems.append(f"{p} is already drafted (Team {tracker._drafted_to_team[p]}).")
+            elif p not in players:
+                players.append(p)
+    return players, problems
+
+
+def cmd_check(tracker, arg, weekly_games_df=None, time_budget=None):
+    """check <player>[, <player> ...] [| <team#>]
+
+    Runs the exact top-3 pipeline (scoring, portfolio fit, live simulations)
+    on players YOU name instead of the auto shortlist, so you can test a
+    player the top 3 didn't show. Ranked among the players you listed.
+    Team defaults to whoever is on the clock, like `top3`."""
+    usage = "usage: check <player>[, <player> ...] [| <team#>]   e.g.  check Cam Thomas, Jalen Green | 9"
+    body, team_txt = (arg.rsplit("|", 1) + [""])[:2] if "|" in arg else (arg, "")
+    if team_txt.strip() and not team_txt.strip().isdigit():
+        print(f"  [!] Team after '|' must be a number. {usage}")
+        return
+    names = [x.strip() for x in body.replace(";", ",").split(",") if x.strip()]
+    if not names:
+        print(f"  [!] {usage}")
+        return
+    if tracker.overall > len(tracker.pick_order):
+        print("  [!] The draft is complete -- nobody is left to pick.")
+        return
+    if len(names) > CHECK_MAX_PLAYERS:
+        print(f"  [!] Check up to {CHECK_MAX_PLAYERS} players at a time (you listed {len(names)}).")
+        return
+    target = int(team_txt.strip()) if team_txt.strip() else tracker.pick_order[tracker.overall - 1]
+    if not 1 <= target <= tracker.teams:
+        print(f"  [!] Team must be between 1 and {tracker.teams}.")
+        return
+    players, problems = _resolve_check_players(tracker, names)
+    for msg in problems:
+        print(f"  [!] {msg}")
+    if not players:
+        return
+    top3, note = recommend_top3(tracker, weekly_games_df=weekly_games_df, team=target,
+                                players=players, time_budget=time_budget)
+    print_top3_table(top3, note, tracker=tracker, team=target, custom=True)
+
+
 _LOOP_HELP = """Commands:
   <player name>              log a pick for whoever is on the clock
   <player name> | <team#>    log a pick for a specific team (out-of-turn entry)
   undo                       remove the most recent pick
   top3 [team]                show the top-3 recommendation table (default: on the clock)
+  check <p1>, <p2> [| team]  run the top-3 analysis on players YOU choose (up to 5), e.g. check Cam Thomas, Jalen Green
+  long [on|off]              (web app) longer Monte Carlo time for every top3 / check; on by default
   catrank                    season-total (games-weighted) category rankings, all teams
   h2hstand                   projected H2H standings + matchups the alliance is losing
   <source>catrank             category rankings scored on ONE projection file
@@ -3495,11 +3621,14 @@ _LOOP_HELP = """Commands:
 """
 
 
-def dispatch_command(tracker, raw, weekly_games_df=None):
+def dispatch_command(tracker, raw, weekly_games_df=None, time_budget=None):
     """Runs one loop command (same grammar as the original CLI loop) and
     returns everything it printed, as a single string, instead of writing
     straight to stdout. Shared by the CLI (run_draft_loop) and the web app
     (app.py) so both stay behind one code path.
+
+    time_budget: optional seconds of Monte Carlo time for top3 / check (the
+    web app passes the long-mode budget); None = TOP3_TIME_BUDGET_SEC.
     """
     wg = weekly_games_df if weekly_games_df is not None else tracker.weekly_games_df
     raw = (raw or "").strip()
@@ -3515,8 +3644,10 @@ def dispatch_command(tracker, raw, weekly_games_df=None):
                 print(_LOOP_HELP)
             elif low == "top3":
                 target = int(arg) if arg.strip().isdigit() else tracker.pick_order[tracker.overall - 1]
-                top3, note = recommend_top3(tracker, weekly_games_df=wg, team=target)
+                top3, note = recommend_top3(tracker, weekly_games_df=wg, team=target, time_budget=time_budget)
                 print_top3_table(top3, note, tracker=tracker, team=target)
+            elif low in ("check", "checkplayers"):
+                cmd_check(tracker, arg, wg, time_budget=time_budget)
             elif low == "catrank":
                 cmd_catrank(tracker, wg)
             elif low in ("h2hstand", "h2h"):

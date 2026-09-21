@@ -52,6 +52,26 @@ POOL_SIZE = int(os.environ.get("POOL_SIZE", engine.DEFAULT_POOL_SIZE))
 # works for a paused team.
 AUTO_PAUSED = set()
 
+# "Long" mode: gives every top-3 (auto, typed/clicked `top3`, and `check`) a
+# longer Monte Carlo time budget than the engine's 4 s default. ON by default;
+# turn it off/on from the page or with `long off` / `long on`. Like AUTO_PAUSED
+# this is a live setting: it survives a draft reset, but not a server restart.
+# Start it off on Render with LONG_MODE=0; change the length (seconds) with
+# LONG_TOP3_SECONDS (default: engine.LONG_TOP3_TIME_BUDGET_SEC, 10).
+LONG_MODE = os.environ.get("LONG_MODE", "1").strip().lower() not in ("0", "false", "no", "off")
+try:
+    LONG_SECONDS = float(os.environ.get("LONG_TOP3_SECONDS", engine.LONG_TOP3_TIME_BUDGET_SEC))
+    if LONG_SECONDS <= 0:
+        raise ValueError
+except ValueError:
+    LONG_SECONDS = float(engine.LONG_TOP3_TIME_BUDGET_SEC)
+
+
+def _top3_budget():
+    """Seconds of Monte Carlo time to give the next top-3 / check (None = the
+    engine's normal default)."""
+    return LONG_SECONDS if LONG_MODE else None
+
 
 def _build_draft():
     """Builds a brand-new, empty draft (same settings every time)."""
@@ -111,6 +131,9 @@ def _state_snapshot():
         "on_clock_is_alliance": on_clock in alliance if on_clock is not None else False,
         "auto_top3_enabled": AUTO_TOP3,
         "auto_top3_paused": sorted(AUTO_PAUSED),
+        "long_mode": LONG_MODE,
+        "long_seconds": LONG_SECONDS,
+        "default_seconds": float(engine.TOP3_TIME_BUDGET_SEC),
     }
 
 
@@ -167,7 +190,8 @@ def _auto_top3_worker(tracker, overall, team, epoch):
             return
         TRACKER.last_report = None
         try:
-            output = engine.dispatch_command(TRACKER, f"top3 {team}", WEEKLY)
+            output = engine.dispatch_command(TRACKER, f"top3 {team}", WEEKLY,
+                                             time_budget=_top3_budget())
         except Exception as e:
             output = f"[!] Auto top-3 failed: {e}"
         data = getattr(TRACKER, "last_report", None)
@@ -241,6 +265,35 @@ def _parse_pause_command(text):
         return paused, {int(a.strip(",")) for a in args}
     except ValueError:
         raise ValueError(f"usage: {parts[0]} <team number> [more teams] | {parts[0]} all")
+
+
+def _set_long_mode(user, enabled):
+    """Call while holding _lock. Turns long mode on/off and logs it."""
+    global LONG_MODE
+    changed = LONG_MODE != enabled
+    LONG_MODE = enabled
+    if enabled:
+        msg = (f"Long mode {'ON' if changed else 'already on'}: top-3 and player checks now get "
+               f"{LONG_SECONDS:.0f}s of Monte Carlo time.")
+    else:
+        msg = (f"Long mode {'OFF' if changed else 'already off'}: top-3 and player checks use the "
+               f"normal {engine.TOP3_TIME_BUDGET_SEC:.0f}s limit.")
+    _append_history(user, "long on" if enabled else "long off", msg,
+                    {"kind": "long_mode", "enabled": LONG_MODE, "seconds": LONG_SECONDS})
+    return msg
+
+
+def _parse_long_command(text):
+    """'long' / 'long on' / 'long off' -> ('status'|'on'|'off') or None if it
+    isn't a long command. Raises ValueError for a malformed one."""
+    parts = text.strip().lower().split()
+    if not parts or parts[0] != "long":
+        return None
+    if len(parts) == 1 or parts[1] == "status":
+        return "status"
+    if len(parts) == 2 and parts[1] in ("on", "off"):
+        return parts[1]
+    raise ValueError("usage: long on | long off | long (shows the current setting)")
 
 
 @app.route("/")
@@ -338,10 +391,24 @@ def api_command():
                 _append_history(user, text, err)
                 return jsonify({"output": err, "data": None, "state": _state_snapshot()})
             return jsonify({"output": msg, "data": None, "state": _state_snapshot()})
+        try:
+            lc = _parse_long_command(text)
+        except ValueError as e:
+            err = f"[!] {e}"
+            _append_history(user, text, err)
+            return jsonify({"output": err, "data": None, "state": _state_snapshot()})
+        if lc is not None:
+            if lc == "status":
+                msg = (f"Long mode is {'ON' if LONG_MODE else 'OFF'} "
+                       f"({LONG_SECONDS:.0f}s when on, {engine.TOP3_TIME_BUDGET_SEC:.0f}s when off).")
+                _append_history(user, text, msg)
+            else:
+                msg = _set_long_mode(user, lc == "on")
+            return jsonify({"output": msg, "data": None, "state": _state_snapshot()})
         before_key = _clock_key()
         TRACKER.last_report = None  # so a stale table never rides along with a different command
         try:
-            output = engine.dispatch_command(TRACKER, text, WEEKLY)
+            output = engine.dispatch_command(TRACKER, text, WEEKLY, time_budget=_top3_budget())
         except Exception as e:
             output = f"[!] Error: {e}"
         data = getattr(TRACKER, "last_report", None)
@@ -373,6 +440,20 @@ def api_auto_top3():
         state = _state_snapshot()
     if err:
         return jsonify({"error": err, "state": state}), 400
+    return jsonify({"ok": True, "message": msg, "state": state})
+
+
+@app.route("/api/long_mode", methods=["POST"])
+def api_long_mode():
+    """Turn long mode on or off. Body: {"enabled": true|false, "user": "..."}"""
+    body = request.get_json(force=True, silent=True) or {}
+    user = (body.get("user") or "").strip() or "anon"
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "enabled must be true or false"}), 400
+    with _lock:
+        msg = _set_long_mode(user, enabled)
+        state = _state_snapshot()
     return jsonify({"ok": True, "message": msg, "state": state})
 
 

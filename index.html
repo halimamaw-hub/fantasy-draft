@@ -224,6 +224,11 @@
   #autoBar button.paused { border-color: #6b5a2f; color: #e0a84a; background: rgba(224,168,74,.10); }
   #autoBar button.all { border-radius: 6px; margin-left: 4px; }
   #autoBar .aoff { color: #e0a84a; }
+  #autoBar .longsep { width: 1px; align-self: stretch; background: var(--border); margin: 0 6px; }
+  #autoBar button.long.on { border-color: #2f5a6b; color: #7fc4d6; background: rgba(127,196,214,.08); }
+  #autoBar button.long.off { border-color: #555; color: var(--muted); background: transparent; }
+  .checkbar { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; flex-wrap: wrap; }
+  .checkbar input { min-width: 240px; padding: 6px 8px; font-size: 13px; }
 
   @media (max-width: 720px) {
     #tab-draft main { flex-direction: column; }
@@ -289,6 +294,10 @@
   <div id="autoBar" hidden></div>
   <div class="quick">
     <button data-cmd="top3">Top 3</button>
+    <span class="checkbar" title="Run the Top 3 analysis on players you choose (up to 5, comma-separated). Add | 9 to check for a specific team.">
+      <input id="checkInput" placeholder="Check players: Cam Thomas, Jalen Green" autocomplete="off" />
+      <button id="checkBtn">Check</button>
+    </span>
     <button data-cmd="status">Status</button>
     <button data-cmd="undo">Undo</button>
     <button data-cmd="help">Help</button>
@@ -304,7 +313,7 @@
   </main>
   <footer>
     <input id="name" placeholder="Your name" />
-    <input id="cmd" placeholder="Type a command (top3, status, undo, pause 6, resume 6, snake, 3rr)…" autocomplete="off" />
+    <input id="cmd" placeholder="Type a command (top3, check <players>, long on/off, status, undo, pause 6, resume 6, snake, 3rr)…" autocomplete="off" />
     <button id="send">Send</button>
   </footer>
 </section>
@@ -344,21 +353,44 @@ let autoBarKey = '';
 function renderAutoBar(s) {
   const teams = s.alliance_teams || [];
   const paused = s.auto_top3_paused || [];
-  const key = JSON.stringify([teams, paused, s.auto_top3_enabled]);
+  const longOn = s.long_mode !== false;
+  const key = JSON.stringify([teams, paused, s.auto_top3_enabled, longOn, s.long_seconds]);
   if (key === autoBarKey) return;               // unchanged: don't repaint every poll
   autoBarKey = key;
-  if (!teams.length) { autoBarEl.hidden = true; return; }
   autoBarEl.hidden = false;
-  const chips = teams.map(t => paused.includes(t)
-    ? `<button class="paused" data-team="${t}" data-paused="0" title="Auto top-3 is paused for Team ${t}. Click to resume.">⏸ Team ${t} paused</button>`
-    : `<button class="on" data-team="${t}" data-paused="1" title="Auto top-3 is on for Team ${t}. Click to pause.">▶ Team ${t} auto</button>`).join('');
-  const allPaused = teams.every(t => paused.includes(t));
-  autoBarEl.innerHTML =
-    `<span class="alabel">Auto top-3:</span>${chips}` +
-    `<button class="all" data-team="all" data-paused="${allPaused ? 0 : 1}">${allPaused ? 'Resume all' : 'Pause all'}</button>` +
-    (s.auto_top3_enabled === false ? '<span class="aoff">(turned off on the server: AUTO_TOP3=0)</span>' : '');
+  let html = '';
+  if (teams.length) {
+    const chips = teams.map(t => paused.includes(t)
+      ? `<button class="paused" data-team="${t}" data-paused="0" title="Auto top-3 is paused for Team ${t}. Click to resume.">⏸ Team ${t} paused</button>`
+      : `<button class="on" data-team="${t}" data-paused="1" title="Auto top-3 is on for Team ${t}. Click to pause.">▶ Team ${t} auto</button>`).join('');
+    const allPaused = teams.every(t => paused.includes(t));
+    html += `<span class="alabel">Auto top-3:</span>${chips}` +
+      `<button class="all" data-team="all" data-paused="${allPaused ? 0 : 1}">${allPaused ? 'Resume all' : 'Pause all'}</button>` +
+      (s.auto_top3_enabled === false ? '<span class="aoff">(turned off on the server: AUTO_TOP3=0)</span>' : '');
+    html += '<span class="longsep"></span>';
+  }
+  const secs = Math.round(s.long_seconds || 0), dflt = Math.round(s.default_seconds || 0);
+  html += longOn
+    ? `<button class="long on" data-long="0" title="Long mode is ON: every top-3 and player check gets ${secs}s of Monte Carlo time. Click to turn off (back to ${dflt}s).">⏱ Long mode on (${secs}s)</button>`
+    : `<button class="long off" data-long="1" title="Long mode is OFF: top-3 and player checks use the normal ${dflt}s limit. Click to turn on (${secs}s).">⏱ Long mode off (${dflt}s)</button>`;
+  autoBarEl.innerHTML = html;
 }
 autoBarEl.addEventListener('click', async (e) => {
+  const lb = e.target.closest('button[data-long]');
+  if (lb) {
+    lb.disabled = true;
+    try {
+      const res = await fetch('/api/long_mode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ enabled: lb.dataset.long === '1', user: nameEl.value || 'anon' }),
+      });
+      const data = await res.json();
+      if (data.state) renderState(data.state);
+    } catch (err) { /* next poll will show the real state */ }
+    finally { lb.disabled = false; }
+    return;
+  }
   const b = e.target.closest('button[data-team]');
   if (!b) return;
   b.disabled = true;
@@ -440,7 +472,7 @@ function renderTop3(d) {
         `<td class="rank">${r.rank}</td>` +
         `<td class="l pcell"><span class="pname">${escapeHtml(r.player)}</span>` +
           (r.position ? `<span class="pos">${escapeHtml(r.position)}</span>` : '') +
-          (i === 0 ? `<span class="tag">Top pick</span>` : '') +
+          (i === 0 ? `<span class="tag">${d.custom ? 'Best of these' : 'Top pick'}</span>` : '') +
           `<span class="chev">${i === 0 ? '▾' : '▸'}</span></td>` +
         `<td data-label="ADP">${fmtNum(r.adp)}</td>` +
         `<td data-label="Cons.">${fmtNum(r.consensus)}</td>` +
@@ -467,16 +499,18 @@ function renderTop3(d) {
   ].map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join('');
 
   return `<div class="top3">` +
-    `<div class="t3-head"><span class="t3-title">Top 3 picks · ${escapeHtml(d.team_label)}</span>` +
+    `<div class="t3-head"><span class="t3-title">${d.custom ? 'Player check' : 'Top 3 picks'} · ${escapeHtml(d.team_label)}</span>` +
     `<span class="t3-sub">${escapeHtml(subBits.join(' · '))}</span></div>` +
     `<div class="t3-wrap"><table class="t3"><thead>` +
       `<tr class="grp"><th></th><th class="l"></th><th colspan="3">Draft market</th><th class="gsep">Availability</th><th colspan="3" class="gsep">Simulated outcomes</th><th class="gsep">Alliance</th><th class="gsep">Goal</th></tr>` +
       `<tr class="cols"><th></th><th class="l">Player</th><th>ADP</th><th>Cons.</th><th>Value</th><th class="gsep">${escapeHtml(nextLbl)}</th><th class="gsep">Podium 2+</th><th>Sweep</th><th>Win title</th><th class="gsep">Ally seeds</th><th class="gsep">Targets</th></tr>` +
     `</thead><tbody>${body}</tbody></table></div>` +
     `<div class="t3-foot">Tap a row for the full breakdown.` +
+      (d.custom ? ' Ranked among the players you chose, not the whole pool.' : '') +
+      (d.budget_sec ? ` <span class="muted">Simulation time budget: ${Math.round(d.budget_sec)}s.</span>` : '') +
       (lowSims ? ` <span class="warn">Some rows ran fewer than ${d.min_sims} simulations (live time limit), so treat their percentages as rough.</span>` : '') +
       `<details><summary>What do these columns mean?</summary><dl>${key}</dl></details>` +
-      (d.note ? `<details><summary>About this recommendation</summary><div style="margin-top:6px">${escapeHtml(d.note)}</div></details>` : '') +
+      (d.note ? `<details><summary>About this ${d.custom ? 'check' : 'recommendation'}</summary><div style="margin-top:6px">${escapeHtml(d.note)}</div></details>` : '') +
     `</div></div>`;
 }
 
@@ -511,13 +545,13 @@ function renderCatrank(d) {
   const head = d.categories.map(c => `<th class="c">${c}</th>`).join('');
   const rows = d.teams.map((t, i) =>
     `<tr class="${t.alliance ? 'ally' : ''}"><td class="l muted">${i + 1}</td><td class="l">${teamHtml(t)}</td>` +
-    `<td><b>${t.avg_rank.toFixed(1)}</b></td>` +
+    `<td><b>${t.total_points}</b></td>` +
     d.categories.map(c => `<td class="cc" style="background:${heat(t.ranks[c], d.n_teams)}"><span class="rk">${t.ranks[c]}</span><span class="cv">${fmtCat(c, t.values[c])}</span></td>`).join('') +
     `</tr>`).join('');
   return `<div class="rep"><div class="rep-head"><span class="rep-title">Category rankings</span>${srcChip(d.source)}</div>` +
     `<div class="rep-sub">Big number = rank in that category (1 = best, green). Small number = projected season total, weighted by each player's real games. ` +
-    `Turnovers: fewer is better. Teams are sorted by average rank. <span class="star">★</span> = alliance team.</div>` +
-    `<div class="rep-wrap"><table class="rt"><thead><tr><th class="l">#</th><th class="l">Team</th><th>Avg rank</th>${head}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    `Turnovers: fewer is better. Points = predicted points: 1st in a category = ${d.max_points} pts down to 1 pt for last, summed over every category; teams are sorted by points. <span class="star">★</span> = alliance team.</div>` +
+    `<div class="rep-wrap"><table class="rt"><thead><tr><th class="l">#</th><th class="l">Team</th><th title="Sum of category points (1st = ${d.max_points}, last = 1)">Points</th>${head}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 function renderH2h(d) {
@@ -571,7 +605,7 @@ function renderBracket(d) {
 }
 
 const RENDERERS = {
-  top3: renderTop3, catrank: renderCatrank, h2hstand: renderH2h, playoffbracket: renderBracket };
+  top3: renderTop3, top3check: renderTop3, catrank: renderCatrank, h2hstand: renderH2h, playoffbracket: renderBracket };
 
 function appendEntry(e) {
   const div = document.createElement('div');
@@ -853,6 +887,16 @@ async function sendCommand(text) {
   }
   // next poll (within 2s) will pick up the new entry for everyone, including us
 }
+
+const checkInputEl = document.getElementById('checkInput');
+function runCheck() {
+  const v = checkInputEl.value.trim();
+  if (!v) { checkInputEl.focus(); return; }
+  checkInputEl.value = '';
+  sendCommand('check ' + v);
+}
+document.getElementById('checkBtn').addEventListener('click', runCheck);
+checkInputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runCheck(); } });
 
 document.getElementById('send').addEventListener('click', () => sendCommand(cmdEl.value));
 cmdEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCommand(cmdEl.value); } });
