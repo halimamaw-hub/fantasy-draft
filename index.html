@@ -354,7 +354,7 @@ function renderAutoBar(s) {
   const teams = s.alliance_teams || [];
   const paused = s.auto_top3_paused || [];
   const longOn = s.long_mode !== false;
-  const key = JSON.stringify([teams, paused, s.auto_top3_enabled, longOn, s.long_seconds]);
+  const key = JSON.stringify([teams, paused, s.auto_top3_enabled, longOn, s.long_trials]);
   if (key === autoBarKey) return;               // unchanged: don't repaint every poll
   autoBarKey = key;
   autoBarEl.hidden = false;
@@ -369,10 +369,10 @@ function renderAutoBar(s) {
       (s.auto_top3_enabled === false ? '<span class="aoff">(turned off on the server: AUTO_TOP3=0)</span>' : '');
     html += '<span class="longsep"></span>';
   }
-  const secs = Math.round(s.long_seconds || 0), dflt = Math.round(s.default_seconds || 0);
+  const trials = Math.round(s.long_trials || 0), dflt = Math.round(s.default_seconds || 0);
   html += longOn
-    ? `<button class="long on" data-long="0" title="Long mode is ON: every top-3 and player check gets ${secs}s of Monte Carlo time. Click to turn off (back to ${dflt}s).">⏱ Long mode on (${secs}s)</button>`
-    : `<button class="long off" data-long="1" title="Long mode is OFF: top-3 and player checks use the normal ${dflt}s limit. Click to turn on (${secs}s).">⏱ Long mode off (${dflt}s)</button>`;
+    ? `<button class="long on" data-long="0" title="Long mode is ON: every top-3 and player check runs ${trials} Monte Carlo rollouts per candidate. Click to turn off (back to a ${dflt}s time limit).">⏱ Long mode on (${trials} sims)</button>`
+    : `<button class="long off" data-long="1" title="Long mode is OFF: top-3 and player checks use the normal ${dflt}s limit. Click to turn on (${trials} sims/candidate).">⏱ Long mode off (${dflt}s)</button>`;
   autoBarEl.innerHTML = html;
 }
 autoBarEl.addEventListener('click', async (e) => {

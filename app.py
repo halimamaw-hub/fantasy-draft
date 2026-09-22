@@ -53,24 +53,29 @@ POOL_SIZE = int(os.environ.get("POOL_SIZE", engine.DEFAULT_POOL_SIZE))
 AUTO_PAUSED = set()
 
 # "Long" mode: gives every top-3 (auto, typed/clicked `top3`, and `check`) a
-# longer Monte Carlo time budget than the engine's 4 s default. ON by default;
-# turn it off/on from the page or with `long off` / `long on`. Like AUTO_PAUSED
-# this is a live setting: it survives a draft reset, but not a server restart.
-# Start it off on Render with LONG_MODE=0; change the length (seconds) with
-# LONG_TOP3_SECONDS (default: engine.LONG_TOP3_TIME_BUDGET_SEC, 10).
+# fixed number of MC rollouts per candidate instead of the engine's normal
+# time-boxed short mode (engine.TOP3_TIME_BUDGET_SEC, 5s by default). ON by
+# default; turn it off/on from the page or with `long off` / `long on`. Like
+# AUTO_PAUSED this is a live setting: it survives a draft reset, but not a
+# server restart. Start it off on Render with LONG_MODE=0; change the trial
+# count with LONG_TOP3_TRIALS (default: engine.LONG_MODE_MC_TRIALS, 10).
 LONG_MODE = os.environ.get("LONG_MODE", "1").strip().lower() not in ("0", "false", "no", "off")
 try:
-    LONG_SECONDS = float(os.environ.get("LONG_TOP3_SECONDS", engine.LONG_TOP3_TIME_BUDGET_SEC))
-    if LONG_SECONDS <= 0:
+    LONG_TRIALS = int(os.environ.get("LONG_TOP3_TRIALS", engine.LONG_MODE_MC_TRIALS))
+    if LONG_TRIALS <= 0:
         raise ValueError
 except ValueError:
-    LONG_SECONDS = float(engine.LONG_TOP3_TIME_BUDGET_SEC)
+    LONG_TRIALS = int(engine.LONG_MODE_MC_TRIALS)
 
 
 def _top3_budget():
-    """Seconds of Monte Carlo time to give the next top-3 / check (None = the
-    engine's normal default)."""
-    return LONG_SECONDS if LONG_MODE else None
+    """(time_budget, mc_trials) kwargs for the next top-3 / check. Long mode
+    runs a fixed rollout count per candidate (mc_trials set, time_budget
+    left at the engine default for the cheap shortlisting stage); short mode
+    is time-boxed (time_budget set, mc_trials=None)."""
+    if LONG_MODE:
+        return None, LONG_TRIALS
+    return None, None
 
 
 def _build_draft():
@@ -132,7 +137,7 @@ def _state_snapshot():
         "auto_top3_enabled": AUTO_TOP3,
         "auto_top3_paused": sorted(AUTO_PAUSED),
         "long_mode": LONG_MODE,
-        "long_seconds": LONG_SECONDS,
+        "long_trials": LONG_TRIALS,
         "default_seconds": float(engine.TOP3_TIME_BUDGET_SEC),
     }
 
@@ -190,8 +195,9 @@ def _auto_top3_worker(tracker, overall, team, epoch):
             return
         TRACKER.last_report = None
         try:
+            _tb, _mct = _top3_budget()
             output = engine.dispatch_command(TRACKER, f"top3 {team}", WEEKLY,
-                                             time_budget=_top3_budget())
+                                             time_budget=_tb, mc_trials=_mct)
         except Exception as e:
             output = f"[!] Auto top-3 failed: {e}"
         data = getattr(TRACKER, "last_report", None)
@@ -273,13 +279,13 @@ def _set_long_mode(user, enabled):
     changed = LONG_MODE != enabled
     LONG_MODE = enabled
     if enabled:
-        msg = (f"Long mode {'ON' if changed else 'already on'}: top-3 and player checks now get "
-               f"{LONG_SECONDS:.0f}s of Monte Carlo time.")
+        msg = (f"Long mode {'ON' if changed else 'already on'}: top-3 and player checks now run "
+               f"{LONG_TRIALS} Monte Carlo rollouts per candidate.")
     else:
         msg = (f"Long mode {'OFF' if changed else 'already off'}: top-3 and player checks use the "
-               f"normal {engine.TOP3_TIME_BUDGET_SEC:.0f}s limit.")
+               f"normal {engine.TOP3_TIME_BUDGET_SEC:.0f}s time limit.")
     _append_history(user, "long on" if enabled else "long off", msg,
-                    {"kind": "long_mode", "enabled": LONG_MODE, "seconds": LONG_SECONDS})
+                    {"kind": "long_mode", "enabled": LONG_MODE, "trials": LONG_TRIALS})
     return msg
 
 
@@ -400,7 +406,8 @@ def api_command():
         if lc is not None:
             if lc == "status":
                 msg = (f"Long mode is {'ON' if LONG_MODE else 'OFF'} "
-                       f"({LONG_SECONDS:.0f}s when on, {engine.TOP3_TIME_BUDGET_SEC:.0f}s when off).")
+                       f"({LONG_TRIALS} rollouts/candidate when on, "
+                       f"{engine.TOP3_TIME_BUDGET_SEC:.0f}s when off).")
                 _append_history(user, text, msg)
             else:
                 msg = _set_long_mode(user, lc == "on")
@@ -408,7 +415,8 @@ def api_command():
         before_key = _clock_key()
         TRACKER.last_report = None  # so a stale table never rides along with a different command
         try:
-            output = engine.dispatch_command(TRACKER, text, WEEKLY, time_budget=_top3_budget())
+            _tb, _mct = _top3_budget()
+            output = engine.dispatch_command(TRACKER, text, WEEKLY, time_budget=_tb, mc_trials=_mct)
         except Exception as e:
             output = f"[!] Error: {e}"
         data = getattr(TRACKER, "last_report", None)

@@ -106,19 +106,19 @@ seconds via the normal polling. It also fires after `undo` or `snake`/`3rr` if t
 alliance team onto the clock, and drops itself if the draft moves on before it finishes.
 Turn it off by setting the `AUTO_TOP3=0` environment variable on Render.
 
-## Long mode (longer Monte Carlo time)
+## Long mode (more Monte Carlo rollouts)
 Every top-3 (auto, typed, or the Top 3 button) and every `check` runs the same
-live Monte Carlo under a wall-clock limit. The normal limit is 4 s, which on a
-slow CPU only fits ~20 simulations per candidate (under the 24 minimum, so the
-table shows "low sample"). **Long mode** raises the limit to **10 s** and is
-**on by default** for everything, including `check`. Turn it off/on from the
-purple/grey "Long mode" chip next to the Auto top-3 chips, or by typing
-`long off` / `long on` (`long` alone shows the current setting). Like pausing
-auto top-3, it's a live setting: it survives a draft reset but not a server
-restart. On Render: `LONG_MODE=0` starts it off, `LONG_TOP3_SECONDS=15`
-changes the length. Beyond ~15-20 s there is no gain, because the simulation
-count is capped (`V15_LIVE_MAX`). Note the server handles one command at a
-time, so a long run briefly holds up everyone else's commands.
+live Monte Carlo. **Short mode** (long mode off) is a wall-clock limit -- 5 s
+by default. **Long mode** is instead a fixed simulation count: it runs
+**10 Monte Carlo rollouts per candidate**, however long that takes, with no
+time limit and no minimum-trial floor. It's **on by default** for everything,
+including `check`. Turn it off/on from the purple/grey "Long mode" chip next
+to the Auto top-3 chips, or by typing `long off` / `long on` (`long` alone
+shows the current setting). Like pausing auto top-3, it's a live setting: it
+survives a draft reset but not a server restart. On Render: `LONG_MODE=0`
+starts it off, `LONG_TOP3_TRIALS=20` changes the rollout count. Note the
+server handles one command at a time, so a long run briefly holds up
+everyone else's commands.
 
 ## Checking players outside the top 3
 `check <player>[, <player> ...] [| <team>]` runs the exact top-3 analysis

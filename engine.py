@@ -2144,18 +2144,83 @@ def _v12_fast_draft_rollout(tracker, forced_team, forced_player, seed):
         if not avail:
             break
         if team in V12_ALLIANCE:
-            # Alliance teams also behave realistically in the rollout. We don't
-            # recursively call recommend_top3; this is the major speed fix.
-            idx = np.array([model.name_to_i[p] for p in avail], dtype=int)
+            # Alliance teams also behave realistically in the rollout: best
+            # player available first, with category/position need layered on
+            # top once the roster has some shape. Need is only worth reaching
+            # for when the player probably WON'T survive to this team's next
+            # pick -- a round-10 category-fit target that's still likely to be
+            # there in two picks shouldn't jump a clearly better round-8
+            # player; a scarce fit about to be sniped is worth taking now.
+            # We don't recursively call recommend_top3 for this; this
+            # windowed/vectorized scoring (same shape as the opponent model)
+            # is the speed fix.
             round_num = ((overall - 1) // tracker.teams) + 1
-            # Market-first early; roster-fit later.
-            consensus = model.consensus[idx]
+            window = V12_DEFAULT_OPP_WINDOW.get(min(round_num, 4), 20)
+            order = np.array([model.name_to_i[p] for p in avail], dtype=int)
+            order = order[np.argsort(model.consensus[order])]
+            window_idx = order[:min(window, len(order))]
+
+            consensus = model.consensus[window_idx]
             score = -consensus / 10.0
             if round_num >= 4:
-                zi = model.zmat[idx]
+                zi = model.zmat[window_idx]
                 score += 0.18 * zi.sum(axis=1)
-            score += rng.normal(0, 1.75, size=len(idx))
-            pname = model.names[idx[int(np.argmax(score))]]
+
+            # Chance each windowed player is still around at this team's next
+            # pick -- low return_prob (likely sniped) raises the urgency of
+            # taking a good fit now; high return_prob (likely to return)
+            # means there's no rush, so BPA keeps the upper hand.
+            next_pick = next_own_pick_overall(tracker, after=overall, team=team)
+            return_prob = np.array([
+                pick_return_probability(float(model.adp[i]), next_pick, 7.0) for i in window_idx
+            ])
+            urgency = 1.0 - return_prob
+
+            roster_idx_now = [model.name_to_i[p] for p in rosters[team] if p in model.name_to_i]
+
+            # Full-roster effect, not just fit to this team's 3 weakest cats.
+            # Weight every category by how contested it currently is across
+            # the whole league (all 10 teams' current totals): a category
+            # this team's already locked up, or already lost outright, barely
+            # moves the needle either way; a close one is where a player's
+            # whole stat line -- what it wins AND what it drags down -- pays
+            # off most. That's what "need" should mean, not just "am I weak
+            # here."
+            team_cat_totals = np.zeros((tracker.teams, len(CAT_COLS)))
+            for t in range(1, tracker.teams + 1):
+                r_idx = [model.name_to_i[p] for p in rosters[t] if p in model.name_to_i]
+                if r_idx:
+                    team_cat_totals[t - 1] = model.zmat[r_idx].sum(axis=0)
+            own_totals = team_cat_totals[team - 1]
+            cmp = own_totals[None, :] - team_cat_totals
+            cmp[team - 1] = 0.0  # exclude self from its own ahead/behind count
+            ahead = (cmp > 0).sum(axis=0)
+            behind = (cmp < 0).sum(axis=0)
+            contested = ahead + behind
+            # 1.0 for a dead-even race, shrinking toward 0 for a category
+            # this team already dominates or has already ceded.
+            cat_weight = np.where(contested > 0,
+                                   1.0 - np.abs(ahead - behind) / np.maximum(contested, 1), 1.0)
+
+            # Every candidate's full per-category z-line, weighted by how much
+            # each of those categories currently matters -- rewards categories
+            # they'd help win, penalizes ones they'd drag down, across the
+            # whole stat line at once.
+            need_score = (model.zmat[window_idx] * cat_weight[None, :]).sum(axis=1)
+            need_score = (need_score - need_score.mean()) / (need_score.std() + 1e-9)
+            need_scale = 0.05 if round_num <= 3 else (0.14 if round_num <= 6 else 0.24)
+            score += need_scale * need_score * urgency
+
+            if round_num >= 3:
+                pos_need = np.zeros(len(window_idx))
+                for pos, minimum in (("G", 2), ("F", 2), ("C", 1)):
+                    have = int(model.pos[pos][roster_idx_now].sum()) if roster_idx_now else 0
+                    if have < minimum:
+                        pos_need += model.pos[pos][window_idx]
+                score += 0.08 * pos_need * urgency
+
+            score += rng.normal(0, 1.75, size=len(window_idx))
+            pname = model.names[window_idx[int(np.argmax(score))]]
         else:
             pname = model.pick(team, avail, overall, rng, rosters[team])
         if pname is None:
@@ -2221,15 +2286,21 @@ def v12_fast_candidate_mc(tracker, team, candidate, min_trials=24, max_trials=96
         if 1.96 * se < 0.045:
             break
     p = sweeps / trials if trials else 0.0
+    pod = podium_2plus / trials if trials else 0.0
     return {
         "mc_sweep_prob": p,
-        "mc_podium_2plus_prob": podium_2plus / trials if trials else 0.0,
+        "mc_podium_2plus_prob": pod,
         "mc_season_sweep_prob": seasons / trials if trials else 0.0,
         "mc_team_champ_prob": champs / trials if trials else 0.0,
         "mc_alliance_top3_share": top3_share_sum / trials if trials else 0.0,
         "mc_trials": trials,
         "mc_ci_low": max(0.0, p - 1.96 * math.sqrt(max(p * (1 - p), 1e-9) / max(trials, 1))),
         "mc_ci_high": min(1.0, p + 1.96 * math.sqrt(max(p * (1 - p), 1e-9) / max(trials, 1))),
+        # Same 95% binomial CI, on the podium (>=2 allies) rate -- used
+        # alongside mc_ci_low/high to catch candidates whose point-estimate
+        # ranking isn't actually statistically separated (see recommend_top3).
+        "mc_podium_ci_low": max(0.0, pod - 1.96 * math.sqrt(max(pod * (1 - pod), 1e-9) / max(trials, 1))),
+        "mc_podium_ci_high": min(1.0, pod + 1.96 * math.sqrt(max(pod * (1 - pod), 1e-9) / max(trials, 1))),
     }
 
 def _v12_candidate_base_table(tracker, team, only_players=None):
@@ -2645,15 +2716,21 @@ V15_LIVE_BATCH = 12
 # throttles trial/candidate counts (never accuracy targets) so a live
 # on-the-clock recommendation always lands in this window instead of running
 # far longer than intended.
-TOP3_TIME_BUDGET_SEC = 4.0
-# "Long" mode (toggled from the web page / `long on|off`): the wall-clock
-# budget used for every top-3 and player check while it is on. Benchmarked at
-# ~0.044 s per rollout on one core: 4 s only fits ~20 trials per candidate
-# (under the 24-trial minimum); ~10 s reaches the minimum with headroom and
-# most of the accuracy gain, and past ~15-20 s the trial ceilings
-# (V15_LIVE_MAX) mean extra time buys nothing. Override with the
-# LONG_TOP3_SECONDS environment variable (read in app.py).
+TOP3_TIME_BUDGET_SEC = 5.0
+# "Long" mode (toggled from the web page / `long on|off`): instead of a
+# wall-clock budget, every top-3 and player check runs a fixed number of MC
+# rollouts per candidate while it is on -- see LONG_MODE_MC_TRIALS below.
+# LONG_TOP3_TIME_BUDGET_SEC is kept only as the time budget for the cheap
+# candidate-shortlisting stage that runs before the MC stage (see
+# recommend_top3); it no longer bounds the MC rollouts themselves.
 LONG_TOP3_TIME_BUDGET_SEC = 10.0
+# Long mode: run exactly this many MC rollouts per candidate (no time limit,
+# and the V15_LIVE_MIN/24-trial floor used by short mode is ignored).
+# Benchmarked at ~0.044 s/rollout on one core, so 10 trials costs ~0.4-0.5s
+# per candidate -- see the `mc_trial_count_study` test for whether 10 is
+# actually enough vs. going higher. Override with the LONG_TOP3_TRIALS
+# environment variable (read in app.py).
+LONG_MODE_MC_TRIALS = 10
 # Most players `check` will evaluate at once; the time budget is scaled up
 # proportionally beyond 3 so each one still gets a full share of it.
 CHECK_MAX_PLAYERS = 5
@@ -3012,7 +3089,8 @@ def v15_batch_top3(tracker, team, deadline=None, players=None):
     out=pd.DataFrame(rows)
     return out.sort_values(['v13_final_score','pre_mc_score'],ascending=False).reset_index(drop=True).head(len(shortlist) if players is not None else 3)
 
-def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None, budget=None, max_names=3):
+def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None, budget=None,
+                     max_names=3, mc_trials=None):
     """Fast sequential MC with separate podium and sweep targets.
 
     podium_2plus_prob = probability that >=2 alliance teams occupy the 3
@@ -3024,7 +3102,25 @@ def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None, budge
     below). Whatever time remains is split evenly across whichever candidates
     still need to run, so no single candidate can eat the entire budget and
     starve the others -- each just gets fewer trials if time is short.
+
+    mc_trials: when given (long mode), ignore the deadline/time-budget path
+    entirely and run exactly this many rollouts per candidate instead --
+    replaces the V15_LIVE_MIN (24-trial) floor and the confidence-interval
+    early stop, and skips the top-2 refinement pass since every candidate
+    already gets the same fixed trial count.
     """
+    if mc_trials is not None:
+        names=candidate_rows['Player'].tolist()[:max_names]
+        results={}
+        for j,p in enumerate(names):
+            results[p]=v12_fast_candidate_mc(
+                tracker,team,p,min_trials=mc_trials,max_trials=mc_trials,
+                batch=min(V15_LIVE_BATCH,mc_trials),target_sweep=V15_SWEEP_FLOOR,
+                conf_margin=0.045,seed=seed+10000*(j+1),deadline=None)
+            if 'mc_podium_2plus_prob' not in results[p]:
+                share=float(results[p].get('mc_alliance_top3_share',0.0))
+                results[p]['mc_podium_2plus_prob']=float(np.clip((3.0*share-1.0)/2.0,0.0,1.0))
+        return results
     if deadline is None:
         deadline = time.monotonic() + (budget or TOP3_TIME_BUDGET_SEC)
     names=candidate_rows['Player'].tolist()[:max_names]
@@ -3091,9 +3187,14 @@ def _v15_adaptive_mc(tracker, team, candidate_rows, seed=0, deadline=None, budge
     return results
 
 def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=0,
-                   players=None, time_budget=None, **kwargs):
+                   players=None, time_budget=None, mc_trials=None, **kwargs):
     """time_budget: wall-clock seconds for the whole call (default
-    TOP3_TIME_BUDGET_SEC; the web app passes the long-mode budget).
+    TOP3_TIME_BUDGET_SEC; ignored for the MC stage when mc_trials is set).
+    mc_trials: when given (long mode), the MC stage runs exactly this many
+    rollouts per candidate instead of being time-boxed -- see
+    LONG_MODE_MC_TRIALS and _v15_adaptive_mc. The candidate-shortlisting
+    stage before it still uses time_budget/TOP3_TIME_BUDGET_SEC, since that
+    stage isn't Monte Carlo and doesn't need a trial count.
     players: optional list of names to evaluate with this exact pipeline
     instead of the auto shortlist (the `check` command) -- see cmd_check."""
     budget=float(time_budget) if time_budget else TOP3_TIME_BUDGET_SEC
@@ -3112,12 +3213,13 @@ def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=
     if candidate.empty: return candidate, f'{team_label(team)} -- no players available.'
     _deadline=_start_ts + budget
     mc=_v15_adaptive_mc(tracker,team,candidate,seed=seed or tracker.overall,deadline=_deadline,
-                        max_names=(n_custom or 3)) if live_mc else {}
+                        max_names=(n_custom or 3),mc_trials=mc_trials) if live_mc else {}
     _total_elapsed=time.monotonic()-_start_ts
     print(f"[timing] candidate scoring: {_batch_elapsed:.2f}s | live MC: {_total_elapsed-_batch_elapsed:.2f}s | total: {_total_elapsed:.2f}s")
     for p,m in mc.items():
         for k,v in m.items(): candidate.loc[candidate.Player==p,k]=v
-    for col in ('mc_sweep_prob','mc_season_sweep_prob','mc_team_champ_prob','mc_alliance_top3_share'):
+    for col in ('mc_sweep_prob','mc_season_sweep_prob','mc_team_champ_prob','mc_alliance_top3_share',
+                'mc_ci_low','mc_ci_high','mc_podium_ci_low','mc_podium_ci_high'):
         if col not in candidate.columns:
             candidate[col]=0.0
         candidate[col]=pd.to_numeric(candidate[col],errors='coerce').fillna(0.0)
@@ -3152,7 +3254,47 @@ def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=
         0.03*candidate['v15_complementarity']+
         0.02*candidate['v15_min_strength']+
         0.02*candidate['v15_last_player_lookahead'])
+
+    # v34: a conservative twin of the same score, using each MC probability's
+    # 95% CI *lower bound* instead of its point estimate. The point-estimate
+    # ranking above can be pure noise at low trial counts (two candidates
+    # whose true sweep/podium odds are identical can still show different
+    # point estimates). Only the MC-derived terms are swapped in here --
+    # the portfolio terms below aren't stochastic, so they're identical.
+    pod_gap_low=(V15_PODIUM_TARGET-candidate['mc_podium_ci_low']).clip(lower=0.0)
+    sweep_gap_low=(V15_SWEEP_FLOOR-candidate['mc_ci_low']).clip(lower=0.0)
+    candidate['v15_dual_target_score_low']=(
+        V15_DUAL_TARGET_WEIGHT*candidate['mc_podium_ci_low']
+        +V15_SWEEP_FLOOR_WEIGHT*candidate['mc_ci_low']
+        -V15_TARGET_PENALTY*(pod_gap_low**2+1.35*sweep_gap_low**2)
+    )
+    candidate['live_goal_score_low']=(
+        0.62*candidate['v15_dual_target_score_low']+
+        0.08*candidate['mc_season_sweep_prob'].fillna(0.0)+
+        0.08*candidate['v13_portfolio_score']+
+        0.05*candidate['v13_category_floor']+
+        0.04*candidate['v13_balance']+
+        0.03*candidate['v13_collision_avoidance']+
+        0.03*candidate['v15_playoff_path']+
+        0.03*candidate['v15_complementarity']+
+        0.02*candidate['v15_min_strength']+
+        0.02*candidate['v15_last_player_lookahead'])
+
     candidate=candidate.sort_values(['live_goal_score','v13_final_score'],ascending=False).reset_index(drop=True)
+    candidate['ci_reranked']=False
+    # If the top two candidates' sweep AND podium confidence intervals both
+    # overlap, their point-estimate order isn't statistically meaningful --
+    # defer to whichever has the better conservative (CI-low) score instead.
+    # Only the top two are checked: that's the pair whose order actually
+    # decides "who do I draft," and cascading this deeper would just chase
+    # noise further down an already-close shortlist.
+    if len(candidate) >= 2:
+        a, b = candidate.iloc[0], candidate.iloc[1]
+        sweep_overlap = (a['mc_ci_low'] <= b['mc_ci_high']) and (b['mc_ci_low'] <= a['mc_ci_high'])
+        podium_overlap = (a['mc_podium_ci_low'] <= b['mc_podium_ci_high']) and (b['mc_podium_ci_low'] <= a['mc_podium_ci_high'])
+        if sweep_overlap and podium_overlap and b['live_goal_score_low'] > a['live_goal_score_low']:
+            candidate = pd.concat([candidate.iloc[[1, 0]], candidate.iloc[2:]]).reset_index(drop=True)
+            candidate.loc[0:1, 'ci_reranked'] = True
     candidate.insert(0,'Recommendation',np.arange(1,len(candidate)+1))
     candidate['goal_priority_score']=candidate['live_goal_score']
     candidate['alliance_goal_delta']=candidate['v13_portfolio_score']-candidate['v13_portfolio_score'].mean()
@@ -3162,7 +3304,11 @@ def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=
          f"targets={'YES' if bool(r.get('v15_target_met',False)) else 'NO'}; "
          f"floor={r['v13_category_floor']:.2f}; comp={r['v15_complementarity']:.2f}; "
          f"min-strength={r['v15_min_strength']:.2f}; path={r['v15_playoff_path']:.2f}; "
-         f"over {int(r.get('mc_trials',0))} sims; CI sweep {r.get('mc_ci_low',0):.1%}-{r.get('mc_ci_high',0):.1%}.")
+         f"over {int(r.get('mc_trials',0))} sims; CI sweep {r.get('mc_ci_low',0):.1%}-{r.get('mc_ci_high',0):.1%}, "
+         f"podium {r.get('mc_podium_ci_low',0):.1%}-{r.get('mc_podium_ci_high',0):.1%}."
+         + (" [Re-ranked vs. the #1/#2 point estimates: their CIs overlap, so the "
+            "conservative (CI-lower-bound) score decided the order instead.]"
+            if bool(r.get('ci_reranked', False)) else ""))
         for _,r in candidate.iterrows()
     ]
     candidate['plain_summary']=[
@@ -3179,8 +3325,8 @@ def recommend_top3(tracker, weekly_games_df=None, team=None, live_mc=True, seed=
           f"heading into the playoffs. 'complementarity' now means every ally staying strong in every "
           f"category (no team quietly relying on an ally to cover a weak one), not divergent rosters. "
           f"Regular-season head-to-head losses among allies are fine -- the shared goal is the championship. "
-          f"Supporting terms: top-3/bye seeding, balance, category floor, weak-link strength, playoff path, "
-          f"position runs, anti-alliance disruption, and scarcity lookahead. "
+          f"Supporting terms: top-3/bye seeding, balance, category floor, weak-link strength (min_strength), "
+          f"playoff path, category complementarity, and scarcity lookahead (last_player_lookahead). "
           f"Next Team {team} pick #{nxt if nxt else 'none'}.")
     if n_custom:
         note=(f"PLAYER CHECK for {team_label(team)}: the players you picked, run through the same scoring "
@@ -3702,7 +3848,7 @@ def _resolve_check_players(tracker, names):
     return players, problems
 
 
-def cmd_check(tracker, arg, weekly_games_df=None, time_budget=None):
+def cmd_check(tracker, arg, weekly_games_df=None, time_budget=None, mc_trials=None):
     """check <player>[, <player> ...] [| <team#>]
 
     Runs the exact top-3 pipeline (scoring, portfolio fit, live simulations)
@@ -3734,7 +3880,7 @@ def cmd_check(tracker, arg, weekly_games_df=None, time_budget=None):
     if not players:
         return
     top3, note = recommend_top3(tracker, weekly_games_df=weekly_games_df, team=target,
-                                players=players, time_budget=time_budget)
+                                players=players, time_budget=time_budget, mc_trials=mc_trials)
     print_top3_table(top3, note, tracker=tracker, team=target, custom=True)
 
 
@@ -3763,14 +3909,17 @@ _LOOP_HELP = """Commands:
 """
 
 
-def dispatch_command(tracker, raw, weekly_games_df=None, time_budget=None):
+def dispatch_command(tracker, raw, weekly_games_df=None, time_budget=None, mc_trials=None):
     """Runs one loop command (same grammar as the original CLI loop) and
     returns everything it printed, as a single string, instead of writing
     straight to stdout. Shared by the CLI (run_draft_loop) and the web app
     (app.py) so both stay behind one code path.
 
-    time_budget: optional seconds of Monte Carlo time for top3 / check (the
-    web app passes the long-mode budget); None = TOP3_TIME_BUDGET_SEC.
+    time_budget: optional seconds of Monte Carlo time for top3 / check; None
+    = TOP3_TIME_BUDGET_SEC (short mode).
+    mc_trials: optional fixed MC rollout count for top3 / check, used
+    instead of a time budget (the web app passes this for long mode --
+    see LONG_MODE_MC_TRIALS).
     """
     wg = weekly_games_df if weekly_games_df is not None else tracker.weekly_games_df
     raw = (raw or "").strip()
@@ -3786,10 +3935,11 @@ def dispatch_command(tracker, raw, weekly_games_df=None, time_budget=None):
                 print(_LOOP_HELP)
             elif low == "top3":
                 target = int(arg) if arg.strip().isdigit() else tracker.pick_order[tracker.overall - 1]
-                top3, note = recommend_top3(tracker, weekly_games_df=wg, team=target, time_budget=time_budget)
+                top3, note = recommend_top3(tracker, weekly_games_df=wg, team=target,
+                                            time_budget=time_budget, mc_trials=mc_trials)
                 print_top3_table(top3, note, tracker=tracker, team=target)
             elif low in ("check", "checkplayers"):
-                cmd_check(tracker, arg, wg, time_budget=time_budget)
+                cmd_check(tracker, arg, wg, time_budget=time_budget, mc_trials=mc_trials)
             elif low == "catrank":
                 cmd_catrank(tracker, wg)
             elif low in ("h2hstand", "h2h"):
