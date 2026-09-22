@@ -67,15 +67,32 @@ try:
 except ValueError:
     LONG_TRIALS = int(engine.LONG_MODE_MC_TRIALS)
 
+# `check` gets its own trial count instead of sharing LONG_TRIALS with `top3`,
+# so the two can be tuned independently. Override with CHECK_TOP3_TRIALS.
+try:
+    CHECK_TRIALS = int(os.environ.get("CHECK_TOP3_TRIALS", 20))
+    if CHECK_TRIALS <= 0:
+        raise ValueError
+except ValueError:
+    CHECK_TRIALS = 20
 
-def _top3_budget():
-    """(time_budget, mc_trials) kwargs for the next top-3 / check. Long mode
-    runs a fixed rollout count per candidate (mc_trials set, time_budget
-    left at the engine default for the cheap shortlisting stage); short mode
-    is time-boxed (time_budget set, mc_trials=None)."""
-    if LONG_MODE:
-        return None, LONG_TRIALS
-    return None, None
+# `check` also gets its own on/off switch, independent of LONG_MODE, so you
+# can run `check` at a fixed CHECK_TRIALS rollout count without also forcing
+# every `top3` into long mode (and vice versa). Start it off on Render with
+# CHECK_MODE=0.
+CHECK_MODE = os.environ.get("CHECK_MODE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _top3_budget(kind="top3"):
+    """(time_budget, mc_trials) kwargs for the next top-3 / check. `top3`
+    follows LONG_MODE/LONG_TRIALS; `check` follows its own CHECK_MODE/
+    CHECK_TRIALS switch, so the two commands can be tuned independently.
+    On: a fixed rollout count per candidate (mc_trials set, time_budget left
+    at the engine default for the cheap shortlisting stage). Off: time-boxed
+    (time_budget set, mc_trials=None)."""
+    if kind == "check":
+        return (None, CHECK_TRIALS) if CHECK_MODE else (None, None)
+    return (None, LONG_TRIALS) if LONG_MODE else (None, None)
 
 
 def _build_draft():
@@ -138,6 +155,8 @@ def _state_snapshot():
         "auto_top3_paused": sorted(AUTO_PAUSED),
         "long_mode": LONG_MODE,
         "long_trials": LONG_TRIALS,
+        "check_mode": CHECK_MODE,
+        "check_trials": CHECK_TRIALS,
         "default_seconds": float(engine.TOP3_TIME_BUDGET_SEC),
     }
 
@@ -274,18 +293,31 @@ def _parse_pause_command(text):
 
 
 def _set_long_mode(user, enabled):
-    """Call while holding _lock. Turns long mode on/off and logs it."""
+    """Call while holding _lock. Turns long mode (top3's fixed rollout count) on/off and logs it."""
     global LONG_MODE
     changed = LONG_MODE != enabled
     LONG_MODE = enabled
     if enabled:
-        msg = (f"Long mode {'ON' if changed else 'already on'}: top-3 and player checks now run "
-               f"{LONG_TRIALS} Monte Carlo rollouts per candidate.")
+        msg = f"Long mode {'ON' if changed else 'already on'}: top-3 now runs {LONG_TRIALS} Monte Carlo rollouts per candidate."
     else:
-        msg = (f"Long mode {'OFF' if changed else 'already off'}: top-3 and player checks use the "
-               f"normal {engine.TOP3_TIME_BUDGET_SEC:.0f}s time limit.")
+        msg = f"Long mode {'OFF' if changed else 'already off'}: top-3 uses the normal {engine.TOP3_TIME_BUDGET_SEC:.0f}s time limit."
     _append_history(user, "long on" if enabled else "long off", msg,
                     {"kind": "long_mode", "enabled": LONG_MODE, "trials": LONG_TRIALS})
+    return msg
+
+
+def _set_check_mode(user, enabled):
+    """Call while holding _lock. Turns check mode (check's fixed rollout count) on/off and logs it.
+    Independent of LONG_MODE -- toggling this doesn't touch top3's setting."""
+    global CHECK_MODE
+    changed = CHECK_MODE != enabled
+    CHECK_MODE = enabled
+    if enabled:
+        msg = f"Check mode {'ON' if changed else 'already on'}: player checks now run {CHECK_TRIALS} Monte Carlo rollouts per candidate."
+    else:
+        msg = f"Check mode {'OFF' if changed else 'already off'}: player checks use the normal {engine.TOP3_TIME_BUDGET_SEC:.0f}s time limit."
+    _append_history(user, "checklong on" if enabled else "checklong off", msg,
+                    {"kind": "check_mode", "enabled": CHECK_MODE, "trials": CHECK_TRIALS})
     return msg
 
 
@@ -300,6 +332,20 @@ def _parse_long_command(text):
     if len(parts) == 2 and parts[1] in ("on", "off"):
         return parts[1]
     raise ValueError("usage: long on | long off | long (shows the current setting)")
+
+
+def _parse_checklong_command(text):
+    """'checklong' / 'checklong on' / 'checklong off' -> ('status'|'on'|'off')
+    or None if it isn't a checklong command. Raises ValueError for a
+    malformed one."""
+    parts = text.strip().lower().split()
+    if not parts or parts[0] != "checklong":
+        return None
+    if len(parts) == 1 or parts[1] == "status":
+        return "status"
+    if len(parts) == 2 and parts[1] in ("on", "off"):
+        return parts[1]
+    raise ValueError("usage: checklong on | checklong off | checklong (shows the current setting)")
 
 
 @app.route("/")
@@ -406,16 +452,33 @@ def api_command():
         if lc is not None:
             if lc == "status":
                 msg = (f"Long mode is {'ON' if LONG_MODE else 'OFF'} "
-                       f"({LONG_TRIALS} rollouts/candidate when on, "
+                       f"({LONG_TRIALS} rollouts/candidate for top3 when on; "
                        f"{engine.TOP3_TIME_BUDGET_SEC:.0f}s when off).")
                 _append_history(user, text, msg)
             else:
                 msg = _set_long_mode(user, lc == "on")
             return jsonify({"output": msg, "data": None, "state": _state_snapshot()})
+        try:
+            cc = _parse_checklong_command(text)
+        except ValueError as e:
+            err = f"[!] {e}"
+            _append_history(user, text, err)
+            return jsonify({"output": err, "data": None, "state": _state_snapshot()})
+        if cc is not None:
+            if cc == "status":
+                msg = (f"Check mode is {'ON' if CHECK_MODE else 'OFF'} "
+                       f"({CHECK_TRIALS} rollouts/candidate for check when on; "
+                       f"{engine.TOP3_TIME_BUDGET_SEC:.0f}s when off).")
+                _append_history(user, text, msg)
+            else:
+                msg = _set_check_mode(user, cc == "on")
+            return jsonify({"output": msg, "data": None, "state": _state_snapshot()})
         before_key = _clock_key()
         TRACKER.last_report = None  # so a stale table never rides along with a different command
         try:
-            _tb, _mct = _top3_budget()
+            first_word = text.split(maxsplit=1)[0].lower() if text.split() else ""
+            _kind = "check" if first_word in ("check", "checkplayers") else "top3"
+            _tb, _mct = _top3_budget(_kind)
             output = engine.dispatch_command(TRACKER, text, WEEKLY, time_budget=_tb, mc_trials=_mct)
         except Exception as e:
             output = f"[!] Error: {e}"
@@ -453,7 +516,7 @@ def api_auto_top3():
 
 @app.route("/api/long_mode", methods=["POST"])
 def api_long_mode():
-    """Turn long mode on or off. Body: {"enabled": true|false, "user": "..."}"""
+    """Turn top-3's long mode on or off. Body: {"enabled": true|false, "user": "..."}"""
     body = request.get_json(force=True, silent=True) or {}
     user = (body.get("user") or "").strip() or "anon"
     enabled = body.get("enabled")
@@ -461,6 +524,21 @@ def api_long_mode():
         return jsonify({"error": "enabled must be true or false"}), 400
     with _lock:
         msg = _set_long_mode(user, enabled)
+        state = _state_snapshot()
+    return jsonify({"ok": True, "message": msg, "state": state})
+
+
+@app.route("/api/check_mode", methods=["POST"])
+def api_check_mode():
+    """Turn check's fixed-rollout mode on or off. Body: {"enabled": true|false, "user": "..."}
+    Independent of /api/long_mode -- this only affects the `check` command."""
+    body = request.get_json(force=True, silent=True) or {}
+    user = (body.get("user") or "").strip() or "anon"
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "enabled must be true or false"}), 400
+    with _lock:
+        msg = _set_check_mode(user, enabled)
         state = _state_snapshot()
     return jsonify({"ok": True, "message": msg, "state": state})
 

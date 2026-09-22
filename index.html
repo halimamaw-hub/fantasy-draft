@@ -227,6 +227,8 @@
   #autoBar .longsep { width: 1px; align-self: stretch; background: var(--border); margin: 0 6px; }
   #autoBar button.long.on { border-color: #2f5a6b; color: #7fc4d6; background: rgba(127,196,214,.08); }
   #autoBar button.long.off { border-color: #555; color: var(--muted); background: transparent; }
+  #autoBar button.checkmode.on { border-color: #5a4a2f; color: #d6b87f; background: rgba(214,184,127,.08); }
+  #autoBar button.checkmode.off { border-color: #555; color: var(--muted); background: transparent; }
   .checkbar { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; flex-wrap: wrap; }
   .checkbar input { min-width: 240px; padding: 6px 8px; font-size: 13px; }
 
@@ -313,7 +315,7 @@
   </main>
   <footer>
     <input id="name" placeholder="Your name" />
-    <input id="cmd" placeholder="Type a command (top3, check <players>, long on/off, status, undo, pause 6, resume 6, snake, 3rr)…" autocomplete="off" />
+    <input id="cmd" placeholder="Type a command (top3, check <players>, long on/off, checklong on/off, status, undo, pause 6, resume 6, snake, 3rr)…" autocomplete="off" />
     <button id="send">Send</button>
   </footer>
 </section>
@@ -354,7 +356,8 @@ function renderAutoBar(s) {
   const teams = s.alliance_teams || [];
   const paused = s.auto_top3_paused || [];
   const longOn = s.long_mode !== false;
-  const key = JSON.stringify([teams, paused, s.auto_top3_enabled, longOn, s.long_trials]);
+  const checkOn = s.check_mode !== false;
+  const key = JSON.stringify([teams, paused, s.auto_top3_enabled, longOn, s.long_trials, checkOn, s.check_trials]);
   if (key === autoBarKey) return;               // unchanged: don't repaint every poll
   autoBarKey = key;
   autoBarEl.hidden = false;
@@ -371,8 +374,12 @@ function renderAutoBar(s) {
   }
   const trials = Math.round(s.long_trials || 0), dflt = Math.round(s.default_seconds || 0);
   html += longOn
-    ? `<button class="long on" data-long="0" title="Long mode is ON: every top-3 and player check runs ${trials} Monte Carlo rollouts per candidate. Click to turn off (back to a ${dflt}s time limit).">⏱ Long mode on (${trials} sims)</button>`
-    : `<button class="long off" data-long="1" title="Long mode is OFF: top-3 and player checks use the normal ${dflt}s limit. Click to turn on (${trials} sims/candidate).">⏱ Long mode off (${dflt}s)</button>`;
+    ? `<button class="long on" data-long="0" title="Long mode is ON: every top-3 runs ${trials} Monte Carlo rollouts per candidate. Click to turn off (back to a ${dflt}s time limit).">⏱ Long mode on (${trials} sims)</button>`
+    : `<button class="long off" data-long="1" title="Long mode is OFF: top-3 uses the normal ${dflt}s limit. Click to turn on (${trials} sims/candidate).">⏱ Long mode off (${dflt}s)</button>`;
+  const checkTrials = Math.round(s.check_trials || 0);
+  html += checkOn
+    ? `<button class="checkmode on" data-checkmode="0" title="Check mode is ON: every player check runs ${checkTrials} Monte Carlo rollouts per candidate, independent of top-3's setting. Click to turn off (back to a ${dflt}s time limit).">🔎 Check: ${checkTrials} sims</button>`
+    : `<button class="checkmode off" data-checkmode="1" title="Check mode is OFF: player checks use the normal ${dflt}s limit. Click to turn on (${checkTrials} sims/candidate).">🔎 Check: ${dflt}s</button>`;
   autoBarEl.innerHTML = html;
 }
 autoBarEl.addEventListener('click', async (e) => {
@@ -389,6 +396,21 @@ autoBarEl.addEventListener('click', async (e) => {
       if (data.state) renderState(data.state);
     } catch (err) { /* next poll will show the real state */ }
     finally { lb.disabled = false; }
+    return;
+  }
+  const cb = e.target.closest('button[data-checkmode]');
+  if (cb) {
+    cb.disabled = true;
+    try {
+      const res = await fetch('/api/check_mode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ enabled: cb.dataset.checkmode === '1', user: nameEl.value || 'anon' }),
+      });
+      const data = await res.json();
+      if (data.state) renderState(data.state);
+    } catch (err) { /* next poll will show the real state */ }
+    finally { cb.disabled = false; }
     return;
   }
   const b = e.target.closest('button[data-team]');

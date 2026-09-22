@@ -3890,7 +3890,8 @@ _LOOP_HELP = """Commands:
   undo                       remove the most recent pick
   top3 [team]                show the top-3 recommendation table (default: on the clock)
   check <p1>, <p2> [| team]  run the top-3 analysis on players YOU choose (up to 5), e.g. check Cam Thomas, Jalen Green
-  long [on|off]              (web app) longer Monte Carlo time for every top3 / check; on by default
+  long [on|off]              (web app) fixed Monte Carlo rollout count for every top3; on by default
+  checklong [on|off]         (web app) fixed Monte Carlo rollout count for `check`, independent of `long`; on by default
   catrank                    season-total (games-weighted) category rankings, all teams
   h2hstand                   projected H2H standings + matchups the alliance is losing
   <source>catrank             category rankings scored on ONE projection file
