@@ -231,6 +231,7 @@
   #autoBar button.checkmode.off { border-color: #555; color: var(--muted); background: transparent; }
   .checkbar { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; flex-wrap: wrap; }
   .checkbar input { min-width: 240px; padding: 6px 8px; font-size: 13px; }
+  .checkbar input#undoToInput { min-width: 60px; width: 70px; }
 
   @media (max-width: 720px) {
     #tab-draft main { flex-direction: column; }
@@ -302,6 +303,10 @@
     </span>
     <button data-cmd="status">Status</button>
     <button data-cmd="undo">Undo</button>
+    <span class="checkbar" title="Undo every pick back through the pick number you enter, putting that pick back on the clock. E.g. type 45 to rewind to pick #45.">
+      <button id="undoToBtn">Undo to pick #</button>
+      <input id="undoToInput" type="number" min="1" step="1" placeholder="45" autocomplete="off" />
+    </span>
     <button data-cmd="help">Help</button>
     <span id="busy"></span>
   </div>
@@ -315,7 +320,7 @@
   </main>
   <footer>
     <input id="name" placeholder="Your name" />
-    <input id="cmd" placeholder="Type a command (top3, check <players>, long on/off, checklong on/off, status, undo, pause 6, resume 6, snake, 3rr)…" autocomplete="off" />
+    <input id="cmd" placeholder="Type a command (top3, check <players>, long on/off, checklong on/off, status, undo, undo 45, pause 6, resume 6, snake, 3rr)…" autocomplete="off" />
     <button id="send">Send</button>
   </footer>
 </section>
@@ -920,6 +925,16 @@ function runCheck() {
 }
 document.getElementById('checkBtn').addEventListener('click', runCheck);
 checkInputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runCheck(); } });
+
+const undoToInputEl = document.getElementById('undoToInput');
+function runUndoTo() {
+  const v = undoToInputEl.value.trim();
+  if (!v) { undoToInputEl.focus(); return; }
+  undoToInputEl.value = '';
+  sendCommand('undo ' + v);
+}
+document.getElementById('undoToBtn').addEventListener('click', runUndoTo);
+undoToInputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runUndoTo(); } });
 
 document.getElementById('send').addEventListener('click', () => sendCommand(cmdEl.value));
 cmdEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCommand(cmdEl.value); } });

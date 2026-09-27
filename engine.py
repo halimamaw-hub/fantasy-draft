@@ -1278,6 +1278,22 @@ class DraftTracker:
         self._drafted_to_team.pop(player, None)
         self.overall -= 1
 
+    def undo_to_pick(self, target_overall):
+        """Undoes picks, most recent first, until `target_overall` is back on the
+        clock (i.e. until self.overall == target_overall). A no-op if that pick
+        is already on the clock or later. Returns the number of picks undone."""
+        if target_overall < 1:
+            raise ValueError("Pick number must be 1 or higher.")
+        if target_overall > self.overall:
+            raise ValueError(
+                f"Pick #{target_overall} hasn't happened yet -- the draft is only up to "
+                f"pick #{self.overall}."
+            )
+        n = self.overall - target_overall
+        for _ in range(n):
+            self.undo_last_pick()
+        return n
+
     def _maybe_auto_recommend(self):
         if not self.auto_recommend_teams:
             return
@@ -3888,6 +3904,7 @@ _LOOP_HELP = """Commands:
   <player name>              log a pick for whoever is on the clock
   <player name> | <team#>    log a pick for a specific team (out-of-turn entry)
   undo                       remove the most recent pick
+  undo <pick#>               undo every pick back through <pick#>, e.g. undo 45
   top3 [team]                show the top-3 recommendation table (default: on the clock)
   check <p1>, <p2> [| team]  run the top-3 analysis on players YOU choose (up to 5), e.g. check Cam Thomas, Jalen Green
   long [on|off]              (web app) fixed Monte Carlo rollout count for every top3; on by default
@@ -3964,8 +3981,22 @@ def dispatch_command(tracker, raw, weekly_games_df=None, time_budget=None, mc_tr
             elif low == "status":
                 tracker.print_status()
             elif low == "undo":
-                tracker.undo_last_pick()
-                print(f"-> undone; now on pick #{tracker.overall}")
+                if not arg.strip():
+                    tracker.undo_last_pick()
+                    print(f"-> undone; now on pick #{tracker.overall}")
+                elif arg.strip().lstrip("-").isdigit():
+                    target = int(arg.strip())
+                    try:
+                        n = tracker.undo_to_pick(target)
+                    except ValueError as e:
+                        print(f"  [!] {e}")
+                    else:
+                        if n == 0:
+                            print(f"-> already on pick #{tracker.overall}; nothing to undo.")
+                        else:
+                            print(f"-> undid {n} pick(s); now back on pick #{tracker.overall}")
+                else:
+                    print("  [!] usage: undo | undo <pick number>")
             else:
                 _log_pick(tracker, raw)
     return buf.getvalue()
